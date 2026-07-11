@@ -1161,7 +1161,7 @@ app.post('/api/tickets', (req, res) => {
 });
 app.get('/api/tickets', requireAdmin('tickets.*'), (_, res) => res.json({ tickets: [...DB.tickets].reverse() }));
 
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
 if (require.main === module) {
   app.listen(PORT, () => {
     console.log(`GIAFABS Enterprise Backend v4 on :${PORT}`);
