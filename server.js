@@ -9,7 +9,7 @@ const {
   ROLE_PERMISSIONS, hasPermission, rateLimit, validate
 } = require('./core');
 const { DB } = require('./data');
-const { initDB, syncDB } = require('./db-postgres');
+const { initDB, syncDB, pool } = require('./db-postgres');
 const swaggerUi = require('swagger-ui-express');
 const swaggerDocument = require('./swagger.json');
 const Razorpay = require('razorpay');
@@ -1160,6 +1160,29 @@ app.post('/api/tickets', (req, res) => {
   res.json({ success: true, ticket: { id: t.id, status: t.status } });
 });
 app.get('/api/tickets', requireAdmin('tickets.*'), (_, res) => res.json({ tickets: [...DB.tickets].reverse() }));
+
+app.get('/api/db-status', async (req, res) => {
+  try {
+    const dbResult = await pool.query("SELECT current_database()");
+    const currentDb = dbResult.rows[0].current_database;
+    const tablesResult = await pool.query("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'");
+    const tables = tablesResult.rows.map(r => r.table_name);
+    res.json({
+      success: true,
+      dbReady,
+      currentDb,
+      tables,
+      envDatabaseUrlSet: !!process.env.DATABASE_URL
+    });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      dbReady,
+      error: err.message,
+      envDatabaseUrlSet: !!process.env.DATABASE_URL
+    });
+  }
+});
 
 const PORT = process.env.PORT || 3001;
 if (require.main === module) {
