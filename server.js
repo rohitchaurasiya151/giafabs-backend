@@ -505,10 +505,8 @@ function computeOrder({ customer, shippingAddress, items, payment, couponCode, t
       size = it.size;
       const variant = productVariants.find(v => v.size === size);
       if (!variant) return { error: `Size ${size} not available for ${prod.name}`, status: 400 };
-      if (variant.stock < qty) return { error: `Insufficient stock for ${prod.name} (${size}) (only ${variant.stock} left)`, status: 409 };
       unit = type === 'b2b' ? prod.b2bPrice : variant.price;
     } else {
-      if (prod.stock < qty) return { error: `Insufficient stock for ${prod.name} (only ${prod.stock} left)`, status: 409 };
       unit = type === 'b2b' ? prod.b2bPrice : prod.price;
     }
 
