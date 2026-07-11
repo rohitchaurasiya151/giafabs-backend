@@ -6,7 +6,12 @@ const { Pool } = require('pg');
 const { DB } = require('./data');
 
 const poolConfig = process.env.DATABASE_URL
-  ? { connectionString: process.env.DATABASE_URL }
+  ? { 
+      connectionString: process.env.DATABASE_URL,
+      ssl: {
+        rejectUnauthorized: false
+      }
+    }
   : {
       host:     process.env.PGHOST     || 'localhost',
       port:     parseInt(process.env.PGPORT || '8090', 10),
