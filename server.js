@@ -13,6 +13,7 @@ const { initDB, syncDB, pool } = require('./db-postgres');
 const swaggerUi = require('swagger-ui-express');
 const swaggerDocument = require('./swagger.json');
 const Razorpay = require('razorpay');
+const { autoDispatchOrder } = require('./src/shipping');
 
 const app = express();
 app.use(cors());
@@ -380,7 +381,7 @@ app.post('/api/products', requireAdmin('products.*'), (req, res) => {
   audit(req.user.email, 'PRODUCT_CREATE', p.id);
   res.json({ success: true, product: attachVariants(p) });
 });
-app.patch('/api/products/:id', requireAdmin('products.*'), (req, res) => {
+app.patch('/api/products/:id', requireAdmin('products.*'), async (req, res) => {
   const p = DB.products.find(x => x.id === req.params.id);
   if (!p) return res.status(404).json({ error: 'Not found' });
   const { variants: incomingVariants, ...body } = req.body;
@@ -391,7 +392,22 @@ app.patch('/api/products/:id', requireAdmin('products.*'), (req, res) => {
     productsSynced.then(() => syncDB('productVariants', DB));
   }
   audit(req.user.email, 'PRODUCT_UPDATE', p.id, req.body);
-  res.json({ success: true, product: attachVariants(p) });
+
+  // Auto-dispatch any orders held due to this product being out of stock
+  const heldOrders = DB.orders.filter(o =>
+    o.shippingStatus === 'awaiting_stock' &&
+    o.items.some(i => i.productId === p.id)
+  );
+  if (heldOrders.length > 0) {
+    // Run sequentially to avoid Shiprocket rate limit
+    for (const heldOrder of heldOrders) {
+      const dispatch = await autoDispatchOrder(heldOrder, DB);
+      audit(req.user.email, 'AUTO_DISPATCH_ON_RESTOCK', heldOrder.id, { result: dispatch.reason, product: p.id });
+    }
+    if (heldOrders.length > 0) syncDB('orders', DB);
+  }
+
+  res.json({ success: true, product: attachVariants(p), autoDispatched: heldOrders.length });
 });
 app.delete('/api/products/:id', requireAdmin('products.*'), (req, res) => {
   const i = DB.products.findIndex(x => x.id === req.params.id);
@@ -629,7 +645,16 @@ app.post('/api/orders', requireCustomer, async (req, res) => {
   if (calc.appliedCoupon) syncDB('coupons', DB);
 
   let gateway = null;
-  if (order.payment.method !== 'cod') {
+  let shipping = null;
+
+  if (order.payment.method === 'cod') {
+    // COD: order is already confirmed at placement — auto-dispatch immediately
+    order.status = 'confirmed';
+    order.updatedAt = new Date().toISOString();
+    order.tracking.history.push({ label: 'Order Confirmed (COD)', done: true, time: order.updatedAt });
+    shipping = await autoDispatchOrder(order, DB);
+    syncDB('orders', DB);
+  } else {
     try {
       gateway = await createGatewayOrder(order);
       if (gateway) {
@@ -645,7 +670,7 @@ app.post('/api/orders', requireCustomer, async (req, res) => {
       return res.status(502).json({ error: `Payment gateway error: ${detail}`, order });
     }
   }
-  res.json({ success: true, order, gateway });
+  res.json({ success: true, order, gateway, shipping });
 });
 
 app.post('/api/orders/manual', requireAdmin('orders.*'), (req, res) => {
@@ -699,9 +724,118 @@ app.patch('/api/orders/:id/status', requireAdmin('orders.update'), (req, res) =>
 });
 
 // ════════════════════════════════════════════════════════════════════════════════
+// SHIPPING MANAGEMENT — admin APIs + Shiprocket webhook
+// ════════════════════════════════════════════════════════════════════════════════
+const { getActiveShippingProvider, checkFulfillableStock } = require('./src/shipping');
+
+// Manual push: admin triggers dispatch for a specific order (e.g. after restocking)
+app.post('/api/shipping/push/:orderId', requireAdmin('orders.update'), async (req, res) => {
+  const order = DB.orders.find(o => o.id === req.params.orderId);
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+  if (order.shippingStatus === 'dispatched') return res.status(409).json({ error: 'Already dispatched', order });
+
+  const { autoDispatchOrder } = require('./src/shipping');
+  const shipping = await autoDispatchOrder(order, DB);
+  audit(req.user.email, 'SHIPPING_MANUAL_PUSH', order.id, { result: shipping.reason });
+  syncDB('orders', DB);
+  res.json({ success: true, shipping, order });
+});
+
+// Cancel shipment in Shiprocket + update local order
+app.post('/api/shipping/cancel/:orderId', requireAdmin('orders.update'), async (req, res) => {
+  const order = DB.orders.find(o => o.id === req.params.orderId);
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+
+  const provider = getActiveShippingProvider(DB);
+  if (provider && order.tracking.providerOrderId) {
+    try {
+      await provider.cancelShipment([order.tracking.providerOrderId]);
+    } catch (e) {
+      return res.status(502).json({ error: 'Shiprocket cancel failed', detail: e?.body || e });
+    }
+  }
+  order.shippingStatus = 'cancelled';
+  order.updatedAt = new Date().toISOString();
+  order.tracking.history.push({ label: 'Shipment Cancelled', done: true, time: order.updatedAt });
+  audit(req.user.email, 'SHIPPING_CANCELLED', order.id);
+  syncDB('orders', DB);
+  res.json({ success: true, order });
+});
+
+// Live tracking pull from Shiprocket by AWB
+app.get('/api/shipping/track/:orderId', requireAdmin('orders.read'), async (req, res) => {
+  const order = DB.orders.find(o => o.id === req.params.orderId);
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+  if (!order.tracking.awb) return res.status(400).json({ error: 'No AWB assigned yet' });
+
+  const provider = getActiveShippingProvider(DB);
+  if (!provider) return res.status(400).json({ error: 'No shipping provider configured' });
+
+  try {
+    const tracking = await provider.trackShipment(order.tracking.awb);
+    res.json({ success: true, awb: order.tracking.awb, tracking });
+  } catch (e) {
+    res.status(502).json({ error: 'Tracking fetch failed', detail: e?.body || e });
+  }
+});
+
+// Get label PDF URL from Shiprocket
+app.get('/api/shipping/label/:orderId', requireAdmin('orders.read'), async (req, res) => {
+  const order = DB.orders.find(o => o.id === req.params.orderId);
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+  if (!order.tracking.shipmentId) return res.status(400).json({ error: 'No shipment created yet' });
+
+  const provider = getActiveShippingProvider(DB);
+  if (!provider) return res.status(400).json({ error: 'No shipping provider configured' });
+
+  try {
+    const label = await provider.generateLabel([order.tracking.shipmentId]);
+    res.json({ success: true, label });
+  } catch (e) {
+    res.status(502).json({ error: 'Label generation failed', detail: e?.body || e });
+  }
+});
+
+// Shiprocket webhook — they POST status updates here automatically
+// Set this URL in Shiprocket dashboard → Settings → Channels → Webhooks
+app.post('/api/shipping/webhook/shiprocket', express.json(), (req, res) => {
+  const { awb, current_status, shipment_id } = req.body || {};
+  if (!awb && !shipment_id) return res.status(400).json({ error: 'Missing awb or shipment_id' });
+
+  const order = DB.orders.find(o =>
+    (awb && o.tracking.awb === awb) ||
+    (shipment_id && o.tracking.shipmentId === String(shipment_id))
+  );
+
+  if (!order) return res.status(404).json({ error: 'Order not found for this AWB' });
+
+  const statusMap = {
+    'PICKUP SCHEDULED': 'confirmed',
+    'PICKUP GENERATED': 'confirmed',
+    'IN TRANSIT': 'shipped',
+    'OUT FOR DELIVERY': 'shipped',
+    'DELIVERED': 'delivered',
+    'UNDELIVERED': 'shipped',
+    'RTO': 'returned',
+    'RTO DELIVERED': 'returned',
+    'CANCELLED': 'cancelled',
+  };
+
+  const newStatus = statusMap[current_status?.toUpperCase()];
+  if (newStatus && order.status !== newStatus) {
+    order.status = newStatus;
+    order.updatedAt = new Date().toISOString();
+    order.tracking.history.push({ label: `Shiprocket: ${current_status}`, done: true, time: order.updatedAt });
+    syncDB('orders', DB);
+  }
+
+  res.json({ received: true });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════
 // SECURE PAYMENT — generic gateway signature verification (multi-gateway-ready)
 // ════════════════════════════════════════════════════════════════════════════════
-app.post('/api/orders/:id/payment/verify', requireCustomer, (req, res) => {
+app.post('/api/orders/:id/payment/verify', requireCustomer, async (req, res) => {
   const order = DB.orders.find(o => o.id === req.params.id && o.customer.email === req.customer.email);
   if (!order) return res.status(404).json({ error: 'Order not found' });
   if (order.payment.status === 'completed') return res.json({ success: true, order }); // idempotent
@@ -731,9 +865,16 @@ app.post('/api/orders/:id/payment/verify', requireCustomer, (req, res) => {
   order.tracking.history.push({ label: 'Payment Confirmed', done: true, time: order.updatedAt });
   DB.transactions.filter(t => t.orderId === order.id).forEach(t => t.status = 'paid');
   audit(req.customer.email, 'PAYMENT_VERIFIED', order.id, { paymentId: gatewayPaymentId });
+
+  // Auto-dispatch to shipping provider (stock check happens inside)
+  const shipping = await autoDispatchOrder(order, DB);
+  if (!shipping.pushed) {
+    audit(req.customer.email, 'SHIPPING_SKIPPED', order.id, { reason: shipping.reason, detail: shipping.message });
+  }
+
   syncDB('orders', DB);
   syncDB('transactions', DB);
-  res.json({ success: true, order });
+  res.json({ success: true, order, shipping });
 });
 
 // ════════════════════════════════════════════════════════════════════════════════
@@ -1029,53 +1170,357 @@ app.get('/api/orders/:id', (req, res) => {
 
   return res.status(401).json({ error: 'Unauthorized to view this order' });
 });
-app.post('/api/orders/:id/return', (req, res) => {
-  const orderId = req.params.id;
-  const order = DB.orders.find(o => o.id === orderId);
-  if (!order) return res.status(404).json({ error: 'Order not found' });
+// ════════════════════════════════════════════════════════════════════════════════
+// POST-ORDER FLOWS — cancel / return / exchange
+// ════════════════════════════════════════════════════════════════════════════════
 
-  // Check if customer owning the order
-  const custToken = req.headers['x-customer-token'];
-  const custSess = custToken && DB.customerSessions[custToken];
-  if (!custSess || custSess.expires < Date.now()) {
-    return res.status(401).json({ error: 'Session expired or invalid' });
+// Shared: resolve customer from token and verify order ownership
+function resolveCustomerOrder(req, res) {
+  const order = DB.orders.find(o => o.id === req.params.id);
+  if (!order) { res.status(404).json({ error: 'Order not found' }); return null; }
+  const sess = DB.customerSessions[req.headers['x-customer-token']];
+  if (!sess || sess.expires < Date.now()) { res.status(401).json({ error: 'Session expired' }); return null; }
+  const cust = DB.customerAuth.find(c => c.id === sess.customerId);
+  if (!cust || order.customer.email !== cust.email) { res.status(403).json({ error: 'Unauthorized' }); return null; }
+  return { order, cust };
+}
+
+// ── CANCEL (customer) ─────────────────────────────────────────────────────────
+// Allowed only before shipment is picked up by courier
+app.post('/api/orders/:id/cancel', async (req, res) => {
+  const ctx = resolveCustomerOrder(req, res);
+  if (!ctx) return;
+  const { order, cust } = ctx;
+
+  const cancellable = ['pending', 'confirmed', 'awaiting_stock', 'dispatch_failed'];
+  if (!cancellable.includes(order.status)) {
+    return res.status(400).json({
+      error: order.status === 'shipped'
+        ? 'Order already shipped — please raise a return request instead'
+        : `Cannot cancel order in status: ${order.status}`,
+    });
   }
 
-  const cust = DB.customerAuth.find(c => c.id === custSess.customerId);
-  if (!cust || order.customer.email !== cust.email) {
-    return res.status(403).json({ error: 'Unauthorized to return this order' });
+  // Cancel shipment in Shiprocket if already pushed
+  if (order.tracking?.providerOrderId) {
+    try {
+      const provider = getActiveShippingProvider(DB);
+      if (provider) await provider.cancelShipment([order.tracking.providerOrderId]);
+    } catch (e) {
+      console.warn('[Shipping] Shiprocket cancel on order cancel failed:', e?.body || e);
+    }
   }
+
+  // Restock
+  order.items.forEach(l => {
+    const prod = DB.products.find(p => p.id === l.productId);
+    if (!prod) return;
+    const variant = l.size ? DB.productVariants.find(v => v.productId === l.productId && v.size === l.size) : null;
+    if (variant) variant.stock += l.qty;
+    else prod.stock += l.qty;
+    recomputeProductAggregate(prod.id);
+  });
+
+  order.status = 'cancelled';
+  order.shippingStatus = 'cancelled';
+  order.updatedAt = new Date().toISOString();
+  order.tracking.history.push({ label: 'Cancelled by customer', done: true, time: order.updatedAt });
+  order.cancelReason = req.body.reason || '';
+
+  audit(cust.email, 'ORDER_CANCEL', order.id, { reason: order.cancelReason });
+  syncDB('orders', DB);
+  syncDB('products', DB).then(() => syncDB('productVariants', DB));
+  res.json({ success: true, order });
+});
+
+// ── RETURN (customer) ─────────────────────────────────────────────────────────
+// Only after delivered; creates a request for admin to approve
+app.post('/api/orders/:id/return', async (req, res) => {
+  const ctx = resolveCustomerOrder(req, res);
+  if (!ctx) return;
+  const { order, cust } = ctx;
 
   if (order.status !== 'delivered') {
     return res.status(400).json({ error: 'Only delivered orders can be returned' });
   }
 
-  const { reason, notes } = req.body;
-  if (!reason) {
-    return res.status(400).json({ error: 'Return reason is required' });
+  const { reason, notes, items } = req.body;
+  if (!reason) return res.status(400).json({ error: 'Return reason is required' });
+
+  // Check return window (default 7 days)
+  const returnWindowDays = DB.settings.store.returnWindowDays || 7;
+  const deliveredAt = order.tracking.history.find(h => h.label?.toLowerCase().includes('delivered'))?.time || order.updatedAt;
+  const daysSince = (Date.now() - new Date(deliveredAt).getTime()) / (1000 * 60 * 60 * 24);
+  if (daysSince > returnWindowDays) {
+    return res.status(400).json({ error: `Return window of ${returnWindowDays} days has passed` });
   }
 
-  order.status = 'returned';
+  const reqId = genId('RET', DB.orderRequests.length + 1001, 5);
+  const request = {
+    id: reqId, type: 'return', orderId: order.id,
+    customer: { name: cust.name, email: cust.email },
+    reason, notes: notes || '',
+    returnItems: items || order.items.map(i => ({ productId: i.productId, size: i.size, qty: i.qty, name: i.name })),
+    status: 'requested',
+    requestedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    reverseAWB: null, reverseShipmentId: null,
+    adminNote: '',
+  };
+
+  DB.orderRequests.push(request);
+  order.tracking.history.push({ label: 'Return Requested', done: false, time: request.requestedAt });
   order.updatedAt = new Date().toISOString();
 
-  if (!order.tracking) {
-    order.tracking = { history: [] };
-  }
-  if (!order.tracking.history) {
-    order.tracking.history = [];
-  }
-
-  order.tracking.history.push({
-    label: 'Return Requested',
-    done: true,
-    time: new Date().toISOString(),
-    description: `Reason: ${reason}. Notes: ${notes || 'None'}`
-  });
-
+  audit(cust.email, 'ORDER_RETURN_REQUEST', order.id, { reason, reqId });
   syncDB('orders', DB);
-  audit(cust.email, 'ORDER_RETURN_REQUEST', orderId, { reason, notes });
+  syncDB('orderRequests', DB);
+  res.json({ success: true, request });
+});
 
-  res.json({ success: true, order });
+// ── EXCHANGE (customer) ───────────────────────────────────────────────────────
+// Wrong size or wrong product received — creates request for admin to approve
+app.post('/api/orders/:id/exchange', async (req, res) => {
+  const ctx = resolveCustomerOrder(req, res);
+  if (!ctx) return;
+  const { order, cust } = ctx;
+
+  if (order.status !== 'delivered') {
+    return res.status(400).json({ error: 'Only delivered orders can be exchanged' });
+  }
+
+  const { reason, notes, returnItems, exchangeItems } = req.body;
+  const validReasons = ['wrong_size', 'wrong_product', 'defective', 'not_as_described'];
+  if (!reason || !validReasons.includes(reason)) {
+    return res.status(400).json({ error: `reason must be one of: ${validReasons.join(', ')}` });
+  }
+  if (!Array.isArray(exchangeItems) || exchangeItems.length === 0) {
+    return res.status(400).json({ error: 'exchangeItems (what customer wants) is required' });
+  }
+
+  // Validate exchange items exist
+  for (const ei of exchangeItems) {
+    const prod = DB.products.find(p => p.id === ei.productId);
+    if (!prod) return res.status(400).json({ error: `Product not found: ${ei.productId}` });
+  }
+
+  const reqId = genId('EXC', DB.orderRequests.length + 1001, 5);
+  const request = {
+    id: reqId, type: 'exchange', orderId: order.id,
+    customer: { name: cust.name, email: cust.email },
+    reason, notes: notes || '',
+    // What comes back from customer
+    returnItems: returnItems || order.items.map(i => ({ productId: i.productId, size: i.size, qty: i.qty, name: i.name })),
+    // What we ship out to customer
+    exchangeItems,
+    status: 'requested',  // requested → approved → pickup_scheduled → item_received → inspected → reshipped → completed
+    requestedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    reverseAWB: null, reverseShipmentId: null,
+    forwardAWB: null, forwardShipmentId: null,
+    adminNote: '',
+  };
+
+  DB.orderRequests.push(request);
+  order.tracking.history.push({ label: `Exchange Requested (${reason})`, done: false, time: request.requestedAt });
+  order.updatedAt = new Date().toISOString();
+
+  audit(cust.email, 'ORDER_EXCHANGE_REQUEST', order.id, { reason, reqId });
+  syncDB('orders', DB);
+  syncDB('orderRequests', DB);
+  res.json({ success: true, request });
+});
+
+// ── ADMIN: list all requests ──────────────────────────────────────────────────
+app.get('/api/order-requests', requireAdmin('orders.read'), (req, res) => {
+  let reqs = [...DB.orderRequests].reverse();
+  const { type, status, orderId } = req.query;
+  if (type) reqs = reqs.filter(r => r.type === type);
+  if (status) reqs = reqs.filter(r => r.status === status);
+  if (orderId) reqs = reqs.filter(r => r.orderId === orderId);
+  res.json({ total: reqs.length, requests: reqs });
+});
+
+// ── ADMIN: approve / reject / mark stages ────────────────────────────────────
+app.patch('/api/order-requests/:id/status', requireAdmin('orders.update'), async (req, res) => {
+  const request = DB.orderRequests.find(r => r.id === req.params.id);
+  if (!request) return res.status(404).json({ error: 'Request not found' });
+
+  const order = DB.orders.find(o => o.id === request.orderId);
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+
+  const { status, adminNote } = req.body;
+  const now = new Date().toISOString();
+  if (adminNote) request.adminNote = adminNote;
+
+  // ── REJECTED ──
+  if (status === 'rejected') {
+    request.status = 'rejected';
+    request.updatedAt = now;
+    order.tracking.history.push({ label: `${request.type === 'exchange' ? 'Exchange' : 'Return'} Rejected`, done: true, time: now });
+    order.updatedAt = now;
+    audit(req.user.email, 'REQUEST_REJECTED', request.id, { type: request.type });
+    syncDB('orders', DB);
+    syncDB('orderRequests', DB);
+    return res.json({ success: true, request });
+  }
+
+  // ── APPROVED → trigger Shiprocket reverse pickup ──
+  if (status === 'approved') {
+    request.status = 'approved';
+    request.updatedAt = now;
+
+    const provider = getActiveShippingProvider(DB);
+    if (provider) {
+      try {
+        const revRes = await provider.createReversePickup(order, request.id);
+        request.reverseShipmentId = String(revRes.shipment_id || '');
+        request.reverseAWB = revRes.awb_code || null;
+        request.status = 'pickup_scheduled';
+      } catch (e) {
+        console.warn('[Shipping] Reverse pickup failed:', e?.body || e);
+        // Continue — admin can retry manually
+      }
+    }
+
+    order.tracking.history.push({
+      label: `${request.type === 'exchange' ? 'Exchange' : 'Return'} Approved${request.reverseAWB ? ' · Reverse AWB: ' + request.reverseAWB : ''}`,
+      done: true, time: now,
+    });
+    order.updatedAt = now;
+    audit(req.user.email, 'REQUEST_APPROVED', request.id, { type: request.type, reverseAWB: request.reverseAWB });
+    syncDB('orders', DB);
+    syncDB('orderRequests', DB);
+    return res.json({ success: true, request });
+  }
+
+  // ── ITEM RECEIVED at warehouse (admin marks after physical receipt) ──
+  if (status === 'item_received') {
+    request.status = 'item_received';
+    request.updatedAt = now;
+    order.tracking.history.push({ label: 'Item Received at Warehouse', done: true, time: now });
+    order.updatedAt = now;
+    audit(req.user.email, 'REQUEST_ITEM_RECEIVED', request.id);
+    syncDB('orders', DB);
+    syncDB('orderRequests', DB);
+    return res.json({ success: true, request });
+  }
+
+  // ── INSPECTED → for return: restock + refund; for exchange: ship new item ──
+  if (status === 'inspected') {
+    const { condition } = req.body; // 'ok' | 'damaged'
+    request.status = 'inspected';
+    request.inspectedCondition = condition || 'ok';
+    request.updatedAt = now;
+
+    if (request.type === 'return' || (request.type === 'exchange' && condition === 'damaged')) {
+      // Restock returned items
+      request.returnItems.forEach(ri => {
+        const prod = DB.products.find(p => p.id === ri.productId);
+        if (!prod) return;
+        const variant = ri.size ? DB.productVariants.find(v => v.productId === ri.productId && v.size === ri.size) : null;
+        if (variant) variant.stock += ri.qty;
+        else prod.stock += ri.qty;
+        recomputeProductAggregate(prod.id);
+      });
+      order.status = 'returned';
+      order.tracking.history.push({ label: 'Item Inspected — Refund Initiated', done: true, time: now });
+      request.status = 'refund_initiated';
+      syncDB('products', DB).then(() => syncDB('productVariants', DB));
+
+      // Trigger Razorpay refund for prepaid orders
+      if (order.payment.method === 'razorpay' && order.payment.transactionId) {
+        try {
+          const { keyId, keySecret } = DB.settings.integrations.razorpay;
+          const rzp = new Razorpay({ key_id: keyId, key_secret: keySecret });
+          const refundRes = await rzp.payments.refund(order.payment.transactionId, {
+            amount: Math.round(order.pricing.total * 100),
+            notes: { orderId: order.id, requestId: request.id, reason: request.reason },
+          });
+          request.refundId = refundRes.id;
+          request.refundStatus = refundRes.status;
+          order.tracking.history.push({ label: `Refund Processed · ID: ${refundRes.id}`, done: true, time: now });
+        } catch (e) {
+          console.warn('[Refund] Razorpay refund failed:', e?.error?.description || e);
+          request.refundStatus = 'failed';
+          order.tracking.history.push({ label: 'Refund Failed — manual action needed', done: false, time: now });
+        }
+      }
+    }
+
+    if (request.type === 'exchange' && condition !== 'damaged') {
+      // Check exchange item stock before shipping
+      const exchangeStockOk = request.exchangeItems.every(ei => {
+        const prod = DB.products.find(p => p.id === ei.productId);
+        if (!prod) return false;
+        const variant = ei.size ? DB.productVariants.find(v => v.productId === ei.productId && v.size === ei.size) : null;
+        return variant ? variant.stock >= ei.qty : prod.stock >= ei.qty;
+      });
+
+      if (!exchangeStockOk) {
+        request.status = 'exchange_stock_pending';
+        order.tracking.history.push({ label: 'Exchange item out of stock — awaiting restock', done: false, time: now });
+      } else {
+        // Deduct exchange item stock
+        request.exchangeItems.forEach(ei => {
+          const prod = DB.products.find(p => p.id === ei.productId);
+          if (!prod) return;
+          const variant = ei.size ? DB.productVariants.find(v => v.productId === ei.productId && v.size === ei.size) : null;
+          if (variant) variant.stock = Math.max(0, variant.stock - ei.qty);
+          else prod.stock = Math.max(0, prod.stock - ei.qty);
+          recomputeProductAggregate(prod.id);
+        });
+
+        // Ship exchange item via Shiprocket
+        const provider = getActiveShippingProvider(DB);
+        if (provider) {
+          try {
+            const exchangeOrder = {
+              ...order,
+              id: `${order.id}-EXC-${request.id}`,
+              items: request.exchangeItems.map(ei => {
+                const prod = DB.products.find(p => p.id === ei.productId);
+                return { ...ei, name: prod?.name || ei.productId, unitPrice: prod?.price || 0, weight: prod?.weight || 0.3, sku: prod?.sku || ei.productId, gstRate: prod?.gst || 12, hsn: prod?.hsn || '' };
+              }),
+            };
+            const fwdRes = await provider.createShipment(exchangeOrder);
+            request.forwardShipmentId = fwdRes.shipmentId;
+            request.forwardAWB = fwdRes.awb;
+            request.status = 'reshipped';
+            order.tracking.history.push({ label: `Exchange Reshipped · AWB: ${fwdRes.awb || 'pending'}`, done: true, time: now });
+          } catch (e) {
+            console.warn('[Shipping] Exchange forward shipment failed:', e?.body || e);
+            request.status = 'reship_failed';
+            order.tracking.history.push({ label: 'Exchange reship failed — manual action needed', done: false, time: now });
+          }
+        } else {
+          request.status = 'reshipped';
+          order.tracking.history.push({ label: 'Exchange item shipped (manual)', done: true, time: now });
+        }
+        syncDB('products', DB).then(() => syncDB('productVariants', DB));
+      }
+    }
+
+    order.updatedAt = now;
+    audit(req.user.email, 'REQUEST_INSPECTED', request.id, { condition, newStatus: request.status });
+    syncDB('orders', DB);
+    syncDB('orderRequests', DB);
+    return res.json({ success: true, request, order });
+  }
+
+  // ── COMPLETED ──
+  if (status === 'completed') {
+    request.status = 'completed';
+    request.updatedAt = now;
+    order.tracking.history.push({ label: `${request.type === 'exchange' ? 'Exchange' : 'Return'} Completed`, done: true, time: now });
+    order.updatedAt = now;
+    audit(req.user.email, 'REQUEST_COMPLETED', request.id);
+    syncDB('orders', DB);
+    syncDB('orderRequests', DB);
+    return res.json({ success: true, request });
+  }
+
+  return res.status(400).json({ error: `Unknown status: ${status}` });
 });
 // Products advanced query
 app.get('/api/products/query', requireAdmin('products.*'), (req, res) => {

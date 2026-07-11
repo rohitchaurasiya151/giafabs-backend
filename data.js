@@ -19,6 +19,7 @@ const DB = {
   ],
 
   orders: [],
+  orderRequests: [],  // cancel / return / exchange requests
   transactions: [],
   customerAuth: [],
   cartItems: [],
@@ -106,6 +107,7 @@ const DB = {
       homeState: 'Gujarat', homePincode: '395002',
       currency: 'INR', timezone: 'Asia/Kolkata', weightUnit: 'kg',
       statementName: 'GIAFABS', logoUrl: '',
+      returnWindowDays: 7,
     },
 
     // ─────────── PAYMENTS (deep — multi-gateway + methods + partial pay) ───────────
