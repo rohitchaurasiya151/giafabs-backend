@@ -1,0 +1,30 @@
+{
+  "name": "giafabs-backend",
+  "version": "1.0.0",
+  "description": "GIAFABS Enterprise Backend",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "jest --coverage",
+    "test:watch": "jest --watch",
+    "test:unit": "jest src/__tests__ --testPathPattern='(?!integration|load-test)'",
+    "test:integration": "jest --testPathPattern=integration",
+    "load-test": "node src/__tests__/load-test.js",
+    "lint": "eslint src --max-warnings 0",
+    "lint:fix": "eslint src --fix"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "pg": "^8.22.0",
+    "razorpay": "^2.9.6",
+    "swagger-jsdoc": "^6.2.0",
+    "swagger-ui-express": "^5.0.1"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "supertest": "^6.3.3"
+  },
+  "private": true
+}

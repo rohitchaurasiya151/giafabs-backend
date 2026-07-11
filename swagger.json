@@ -1,0 +1,343 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "GIAFABS Enterprise API Documentation",
+    "version": "4.0.0",
+    "description": "Comprehensive API documentation for GIAFABS Women's Fashion storefront and admin control center backend, with full PostgreSQL persistence."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:3001",
+      "description": "Local Development Server"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "AdminAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-admin-token",
+        "description": "Access token for administrators"
+      },
+      "CustomerAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-customer-token",
+        "description": "Access token for customers"
+      }
+    }
+  },
+  "paths": {
+    "/api/health": {
+      "get": {
+        "summary": "Health check",
+        "description": "Verifies that the backend server is running and database is connected.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string", "example": "UP" },
+                    "version": { "type": "string", "example": "4.0" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/bootstrap": {
+      "get": {
+        "summary": "Bootstrap Configuration",
+        "description": "Initializes the storefront client by loading current active theme, feature flags, global configuration, and countries list.",
+        "responses": {
+          "200": {
+            "description": "Bootstrap parameters loaded"
+          }
+        }
+      }
+    },
+    "/api/auth/login": {
+      "post": {
+        "summary": "Admin Login",
+        "description": "Authenticates administrative users and employees.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["email", "password"],
+                "properties": {
+                  "email": { "type": "string", "format": "email", "example": "admin@giafabs.com" },
+                  "password": { "type": "string", "example": "admin123" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Admin session created successfully" },
+          "401": { "description": "Invalid credentials" }
+        }
+      }
+    },
+    "/api/auth/logout": {
+      "post": {
+        "summary": "Admin Logout",
+        "description": "Terminates the admin session.",
+        "security": [{ "AdminAuth": [] }],
+        "responses": {
+          "200": { "description": "Logged out" }
+        }
+      }
+    },
+    "/api/customer/register": {
+      "post": {
+        "summary": "Customer Registration",
+        "description": "Registers a new customer account.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["name", "email", "password"],
+                "properties": {
+                  "name": { "type": "string", "example": "Priya Sharma" },
+                  "email": { "type": "string", "format": "email", "example": "priya@test.com" },
+                  "password": { "type": "string", "example": "secret123" },
+                  "mobile": { "type": "string", "example": "9876543210" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Registration successful" },
+          "400": { "description": "Invalid input details" },
+          "409": { "description": "Email already exists" }
+        }
+      }
+    },
+    "/api/customer/login": {
+      "post": {
+        "summary": "Customer Login",
+        "description": "Authenticates registered storefront customers.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["email", "password"],
+                "properties": {
+                  "email": { "type": "string", "format": "email", "example": "priya@test.com" },
+                  "password": { "type": "string", "example": "secret123" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Login successful" },
+          "401": { "description": "Invalid email or password" }
+        }
+      }
+    },
+    "/api/customer/logout": {
+      "post": {
+        "summary": "Customer Logout",
+        "description": "Terminates the customer session.",
+        "security": [{ "CustomerAuth": [] }],
+        "responses": {
+          "200": { "description": "Logged out" }
+        }
+      }
+    },
+    "/api/customer/me": {
+      "get": {
+        "summary": "Get Profile Info",
+        "description": "Retrieves the current logged-in customer's details and saved addresses.",
+        "security": [{ "CustomerAuth": [] }],
+        "responses": {
+          "200": { "description": "Profile loaded" }
+        }
+      }
+    },
+    "/api/products": {
+      "get": {
+        "summary": "List Products",
+        "description": "Retrieves all active catalog products. Supports filters and sorting.",
+        "parameters": [
+          { "name": "category", "in": "query", "schema": { "type": "string" } },
+          { "name": "search", "in": "query", "schema": { "type": "string" } },
+          { "name": "sortBy", "in": "query", "schema": { "type": "string", "enum": ["price-low", "price-high", "rating"] } }
+        ],
+        "responses": {
+          "200": { "description": "Success" }
+        }
+      },
+      "post": {
+        "summary": "Create Product",
+        "description": "Creates a new catalog product.",
+        "security": [{ "AdminAuth": [] }],
+        "responses": {
+          "200": { "description": "Product created successfully" }
+        }
+      }
+    },
+    "/api/products/{id}": {
+      "get": {
+        "summary": "Product details",
+        "description": "Retrieves information for a single product and includes a list of related items.",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Success" },
+          "404": { "description": "Product not found" }
+        }
+      },
+      "patch": {
+        "summary": "Update Product",
+        "description": "Modifies details of an existing product.",
+        "security": [{ "AdminAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Updated successfully" }
+        }
+      },
+      "delete": {
+        "summary": "Delete Product",
+        "description": "Removes a product from the catalog.",
+        "security": [{ "AdminAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Deleted successfully" }
+        }
+      }
+    },
+    "/api/coupons/validate": {
+      "post": {
+        "summary": "Validate Coupon Code",
+        "description": "Checks if a coupon is active, not expired, and meets the minimum order amount.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["code", "subtotal"],
+                "properties": {
+                  "code": { "type": "string", "example": "WELCOME10" },
+                  "subtotal": { "type": "integer", "example": 1200 }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Coupon is valid and returns computed discount" },
+          "400": { "description": "Coupon criteria not met" }
+        }
+      }
+    },
+    "/api/orders": {
+      "post": {
+        "summary": "Place Order",
+        "description": "Creates a new customer order, records transactions, decrements stock levels, and locks pricing.",
+        "security": [{ "CustomerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["items", "payment", "shippingAddress"],
+                "properties": {
+                  "items": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "productId": { "type": "string", "example": "PRD001" },
+                        "qty": { "type": "integer", "example": 1 }
+                      }
+                    }
+                  },
+                  "payment": {
+                    "type": "object",
+                    "properties": {
+                      "method": { "type": "string", "example": "cod" }
+                    }
+                  },
+                  "shippingAddress": {
+                    "type": "object",
+                    "properties": {
+                      "line1": { "type": "string" },
+                      "city": { "type": "string" },
+                      "state": { "type": "string" },
+                      "pincode": { "type": "string" },
+                      "countryCode": { "type": "string", "example": "IN" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Order created successfully" }
+        }
+      }
+    },
+    "/api/orders/{id}/cancel": {
+      "post": {
+        "summary": "Cancel Order",
+        "description": "Cancels an order and automatically restocks all related items.",
+        "security": [{ "CustomerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Order cancelled successfully" }
+        }
+      }
+    },
+    "/api/tickets": {
+      "post": {
+        "summary": "Create Support Ticket",
+        "description": "Files a support query from storefront users.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["name", "email", "message"],
+                "properties": {
+                  "name": { "type": "string", "example": "Rohan" },
+                  "email": { "type": "string", "format": "email", "example": "rohan@test.com" },
+                  "subject": { "type": "string", "example": "Order Inquiry" },
+                  "message": { "type": "string", "example": "When will my order arrive?" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Ticket filed" }
+        }
+      }
+    }
+  }
+}
