@@ -657,6 +657,11 @@ function rowToOrder(r) {
       state: shippingAddress?.state || 'Gujarat',
       label: r.tax > 0 ? 'GST' : 'Zero-rated',
     },
+    tracking: {
+      partner: 'Delhivery',
+      awb: null,
+      history: [{ label: `Order ${r.status}`, done: true, time: r.created_at || new Date().toISOString() }],
+    },
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };

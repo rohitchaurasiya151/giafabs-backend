@@ -18,10 +18,16 @@ const DB = {
     {id:'PRD010',sku:'WSHL001',name:'Pashmina Wool Shawl',description:'Premium Kashmiri pashmina shawl — soft, warm and luxurious.',category:'Accessories',subcategory:'Shawls',brand:'Kashmir Classics',price:4999,mrp:9999,b2bPrice:3599,cost:2800,fabric:'Pashmina',color:'Cream',sizes:['Freesize'],gst:12,hsn:'62091100',weight:0.35,stock:22,minStock:3,active:true,featured:true,isNew:false,badge:'Premium',rating:4.9,reviews:55,international:true,tags:['accessory','shawl','luxury'],images:['shawl-pashmina']},
   ],
 
-  orders: [],
-  orderRequests: [],  // cancel / return / exchange requests
+  orders: [
+    {id:'GIAFABS0001',createdAt:'2026-07-10T10:00:00Z',updatedAt:'2026-07-12T15:30:00Z',type:'b2c',customer:{name:'Priya Sharma',email:'priya.sharma@example.com',mobile:'9876543210'},shippingAddress:{firstName:'Priya',lastName:'Sharma',line1:'123 Fashion Street',line2:'Apt 4B',city:'Mumbai',state:'Maharashtra',pincode:'400001',country:'India',countryCode:'IN'},items:[{productId:'PRD001',size:'M',name:'Emerald Silk Kurta with Embroidery',sku:'WKTA001',hsn:'61103090',gstRate:12,unitPrice:2499,qty:1,lineSubtotal:2499,lineGst:300}],payment:{method:'cod',status:'pending',transactionId:null,gatewayOrderId:null},pricing:{subtotal:2499,gst:300,discount:0,coupon:null,shipping:49,codCharge:50,total:2898,currency:'INR',currencySymbol:'₹',fxRate:1,totalInCurrency:2898},tax:{gstin:'07AAJPT5055K1Z0',state:'Maharashtra',label:'CGST + SGST (intra-state)'},status:'delivered',isInternational:false,tracking:{partner:'Delhivery',awb:'DLV1234567890',providerOrderId:'SR123456',history:[{label:'Order Placed',done:true,time:'2026-07-10T10:00:00Z'},{label:'Order Confirmed (COD)',done:true,time:'2026-07-10T10:15:00Z'},{label:'Shipment Created',done:true,time:'2026-07-10T11:00:00Z'},{label:'Order Delivered',done:true,time:'2026-07-12T15:30:00Z'}]},shippingStatus:'delivered'}
+  ],
+  orderRequests: [
+    {id:'RET0001',type:'return',orderId:'GIAFABS0001',customer:{name:'Priya Sharma',email:'priya.sharma@example.com'},reason:'defective',notes:'The kurta has loose stitching on the sleeves',returnItems:[{productId:'PRD001',size:'M',qty:1,name:'Emerald Silk Kurta with Embroidery'}],status:'requested',requestedAt:'2026-07-12T16:00:00Z',updatedAt:'2026-07-12T16:00:00Z',reverseAWB:null,reverseShipmentId:null,adminNote:''}
+  ],
   transactions: [],
-  customerAuth: [],
+  customerAuth: [
+    {id:'CU1001',name:'Priya Sharma',email:'priya.sharma@example.com',mobile:'9876543210',passwordHash:hashPw('test123'),createdAt:'2026-07-10T10:00:00Z',wallet:0,addresses:[]}
+  ],
   cartItems: [],
   wishlistItems: [],
   productVariants: [],
