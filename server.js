@@ -2,6 +2,7 @@
 // GIAFABS ENTERPRISE BACKEND v4
 // Fully-controlled commerce engine. Frontend reads config/content/flags from here.
 // ════════════════════════════════════════════════════════════════════════════════
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const {
@@ -18,6 +19,10 @@ const { autoDispatchOrder } = require('./src/shipping');
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
+
+// Serve static files (uploads directory)
+const path = require('path');
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Swagger UI Documentation
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
@@ -1626,6 +1631,12 @@ app.get('/api/db-status', async (req, res) => {
     });
   }
 });
+
+// ════════════════════════════════════════════════════════════════════════════════
+// IMAGE UPLOAD ROUTES (Phase 1)
+// ════════════════════════════════════════════════════════════════════════════════
+const imagesRouter = require('./src/routes/images');
+app.use('/api/images', imagesRouter);
 
 const PORT = process.env.PORT || 3001;
 if (require.main === module) {

@@ -6,7 +6,7 @@
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: giafabs-postgres-new
+    container_name: giafabs-postgres-dev
     ports:
       - "${PGPORT:-8090}:5432"
     environment:

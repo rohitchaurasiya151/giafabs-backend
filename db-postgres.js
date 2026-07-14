@@ -38,7 +38,7 @@ async function initDB(DB) {
         transactions, orders,
         audit_log, tickets, coupons,
         customer_auth, employees, users,
-        product_variants, products, countries, configs
+        product_images, product_variants, products, countries, configs
       CASCADE;
     `);
   }
@@ -177,6 +177,25 @@ async function initDB(DB) {
       active        BOOLEAN      NOT NULL DEFAULT TRUE,
       created_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW()
     );
+
+    -- ── PRODUCT IMAGES (references products + users, must come after both) ──
+    CREATE TABLE IF NOT EXISTS product_images (
+      id                  VARCHAR(50)   PRIMARY KEY,
+      product_id          VARCHAR(50)   NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+      image_url           TEXT          NOT NULL,
+      thumbnail_url       TEXT,
+      mobile_url          TEXT,
+      alt_text            VARCHAR(255),
+      display_order       INT           DEFAULT 0,
+      file_size           INT,
+      mime_type           VARCHAR(50),
+      original_filename   VARCHAR(255),
+      uploaded_by         VARCHAR(50)   REFERENCES users(id) ON DELETE SET NULL,
+      created_at          TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+      updated_at          TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_product_images_product_id ON product_images(product_id);
+    CREATE INDEX IF NOT EXISTS idx_product_images_order ON product_images(product_id, display_order);
 
     -- ── ADMIN SESSIONS ────────────────────────────────────────────────────
     CREATE TABLE IF NOT EXISTS admin_sessions (
