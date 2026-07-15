@@ -1,5 +1,6 @@
 // Shipping provider factory — returns the active enabled provider or null
 const { ShiprocketProvider } = require('./shiprocket');
+const { DelhiveryProvider } = require('./delhivery');
 
 function getActiveShippingProvider(DB) {
   const integrations = DB.settings.integrations;
@@ -11,6 +12,9 @@ function getActiveShippingProvider(DB) {
     if (!cfg || cfg.category !== 'shipping' || !cfg.enabled || !cfg.autoPush) continue;
     if (name === 'shiprocket' && cfg.email && cfg.password) {
       return new ShiprocketProvider(cfg, store);
+    }
+    if (name === 'delhivery' && cfg.apiToken) {
+      return new DelhiveryProvider(cfg, store);
     }
     // Future providers: add here same pattern
   }

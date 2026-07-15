@@ -143,7 +143,7 @@ const DB = {
       ccavenue:  { category:'payment', label:'CCAvenue',  enabled:false, mode:'test', merchantId:'', accessCode:'', workingKey:'', webhookSecret:'', status:'disconnected', fee:'2%' },
       // SHIPPING / LOGISTICS
       shiprocket:{ category:'shipping', label:'Shiprocket (multi-courier)', enabled:true, email:'', password:'', channelId:'', pickupPincode:'395002', autoPush:true, webhookSecret:'', status:'connected' },
-      delhivery: { category:'shipping', label:'Delhivery (direct)', enabled:false, apiToken:'', clientName:'', pickupPincode:'395002', autoPush:false, status:'disconnected' },
+      delhivery: { category:'shipping', label:'Delhivery (direct)', enabled:false, apiToken:'', clientName:'', pickupLocation:'', sellerGstTin:'', pickupPincode:'395002', autoPush:false, status:'disconnected' },
       bluedart:  { category:'shipping', label:'Bluedart', enabled:false, licenseKey:'', loginId:'', status:'disconnected' },
       dtdc:      { category:'shipping', label:'DTDC', enabled:false, accessToken:'', customerCode:'', status:'disconnected' },
       porter:    { category:'shipping', label:'Porter (hyperlocal)', enabled:false, apiKey:'', status:'disconnected' },
