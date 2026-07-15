@@ -190,12 +190,14 @@ async function initDB(DB) {
       file_size           INT,
       mime_type           VARCHAR(50),
       original_filename   VARCHAR(255),
+      cloudinary_public_id VARCHAR(255),
       uploaded_by         VARCHAR(50)   REFERENCES users(id) ON DELETE SET NULL,
       created_at          TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
       updated_at          TIMESTAMPTZ   NOT NULL DEFAULT NOW()
     );
     CREATE INDEX IF NOT EXISTS idx_product_images_product_id ON product_images(product_id);
     CREATE INDEX IF NOT EXISTS idx_product_images_order ON product_images(product_id, display_order);
+    ALTER TABLE product_images ADD COLUMN IF NOT EXISTS cloudinary_public_id VARCHAR(255);
 
     -- ── ADMIN SESSIONS ────────────────────────────────────────────────────
     CREATE TABLE IF NOT EXISTS admin_sessions (

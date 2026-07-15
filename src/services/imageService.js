@@ -1,102 +1,70 @@
 /**
  * Image Service
- * Handles image processing, optimization, and storage
+ * Handles image upload, delivery, and metadata management via Cloudinary
  */
 
-const sharp = require('sharp');
-const fs = require('fs');
-const path = require('path');
+const cloudinary = require('../config/cloudinary');
 const { query, queryOne } = require('../config/database');
 const { genId } = require('../../core');
 
-const uploadDir = process.env.UPLOAD_DIR || './uploads';
-const enableOptimization = process.env.ENABLE_IMAGE_OPTIMIZATION === 'true';
 const thumbWidth = parseInt(process.env.THUMBNAIL_WIDTH || '150');
 const thumbHeight = parseInt(process.env.THUMBNAIL_HEIGHT || '150');
 const mobileWidth = parseInt(process.env.MOBILE_WIDTH || '600');
-const jpegQuality = parseInt(process.env.JPEG_QUALITY || '80');
+
+/**
+ * Upload a buffer to Cloudinary via the streaming API (avoids writing
+ * the file to disk, since multer keeps uploads in memory).
+ */
+function uploadBufferToCloudinary(buffer, options) {
+  return new Promise((resolve, reject) => {
+    const uploadStream = cloudinary.uploader.upload_stream(options, (error, result) => {
+      if (error) return reject(error);
+      resolve(result);
+    });
+    uploadStream.end(buffer);
+  });
+}
 
 class ImageService {
   /**
-   * Process and store uploaded image variants
-   * Generates: original, thumbnail, mobile
+   * Upload image to Cloudinary and store its metadata.
+   * Thumbnail/mobile variants are generated eagerly at upload time.
    */
   static async processUploadedImage(file, productId, altText = '') {
-    try {
-      const fileName = path.basename(file.path);
-      const fileNameWithoutExt = path.parse(fileName).name;
-      const productDir = path.join(uploadDir, 'products', productId);
+    const result = await uploadBufferToCloudinary(file.buffer, {
+      folder: `giafabs/products/${productId}`,
+      resource_type: 'image',
+      quality_analysis: false,
+      eager: [
+        { width: thumbWidth, height: thumbHeight, crop: 'fill', gravity: 'auto', quality: 'auto', fetch_format: 'auto' },
+        { width: mobileWidth, crop: 'fill', gravity: 'auto', quality: 'auto', fetch_format: 'auto' },
+      ],
+    });
 
-      // 1. Process original image (optimize if enabled)
-      const originalBuffer = await fs.promises.readFile(file.path);
-      let processedOriginal = sharp(originalBuffer);
+    const imageId = genId('IMG', Math.random().toString(36).substr(2, 9), 6);
+    const imageUrl = result.secure_url;
+    const thumbnailUrl = result.eager?.[0]?.secure_url || imageUrl;
+    const mobileUrl = result.eager?.[1]?.secure_url || imageUrl;
 
-      if (enableOptimization) {
-        processedOriginal = processedOriginal.jpeg({ quality: jpegQuality });
-      }
+    await query(
+      `INSERT INTO product_images
+       (id, product_id, image_url, thumbnail_url, mobile_url, alt_text, file_size, mime_type, original_filename, cloudinary_public_id, display_order, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())`,
+      [imageId, productId, imageUrl, thumbnailUrl, mobileUrl, altText || '', result.bytes, file.mimetype, file.originalname, result.public_id, 0]
+    );
 
-      const originalPath = path.join(productDir, `${fileNameWithoutExt}.jpg`);
-      await processedOriginal.toFile(originalPath);
-
-      // 2. Generate thumbnail
-      const thumbnailPath = path.join(productDir, `${fileNameWithoutExt}-thumb.jpg`);
-      await sharp(originalBuffer)
-        .resize(thumbWidth, thumbHeight, { fit: 'cover' })
-        .jpeg({ quality: jpegQuality })
-        .toFile(thumbnailPath);
-
-      // 3. Generate mobile-optimized variant
-      const mobilePath = path.join(productDir, `${fileNameWithoutExt}-mobile.jpg`);
-      await sharp(originalBuffer)
-        .resize(mobileWidth, mobileWidth * 1.5, { fit: 'cover' })
-        .jpeg({ quality: jpegQuality })
-        .toFile(mobilePath);
-
-      // 4. Get file stats
-      const fileStats = await fs.promises.stat(originalPath);
-
-      // 5. Create database record
-      const imageId = genId('IMG', Math.random().toString(36).substr(2, 9), 6);
-      const imageUrl = `/uploads/products/${productId}/${path.basename(originalPath)}`;
-      const thumbnailUrl = `/uploads/products/${productId}/${path.basename(thumbnailPath)}`;
-      const mobileUrl = `/uploads/products/${productId}/${path.basename(mobilePath)}`;
-
-      await query(
-        `INSERT INTO product_images
-         (id, product_id, image_url, thumbnail_url, mobile_url, alt_text, file_size, mime_type, original_filename, display_order, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())`,
-        [imageId, productId, imageUrl, thumbnailUrl, mobileUrl, altText || '', fileStats.size, 'image/jpeg', file.originalname, 0]
-      );
-
-      // 6. Clean up the raw upload — but only if it's a different file than
-      // the processed "original" we just wrote. Multer saves uploads
-      // directly into the product directory (not a separate /tmp staging
-      // area), and for JPEG uploads `file.path` and `originalPath` resolve
-      // to the identical filename, so unlinking unconditionally would
-      // delete the very file we just created.
-      if (path.resolve(file.path) !== path.resolve(originalPath)) {
-        await fs.promises.unlink(file.path);
-      }
-
-      return {
-        id: imageId,
-        product_id: productId,
-        image_url: imageUrl,
-        thumbnail_url: thumbnailUrl,
-        mobile_url: mobileUrl,
-        alt_text: altText,
-        file_size: fileStats.size,
-        mime_type: 'image/jpeg',
-        display_order: 0,
-        created_at: new Date().toISOString(),
-      };
-    } catch (error) {
-      // Clean up on error
-      if (file.path && fs.existsSync(file.path)) {
-        await fs.promises.unlink(file.path).catch(() => {});
-      }
-      throw error;
-    }
+    return {
+      id: imageId,
+      product_id: productId,
+      image_url: imageUrl,
+      thumbnail_url: thumbnailUrl,
+      mobile_url: mobileUrl,
+      alt_text: altText,
+      file_size: result.bytes,
+      mime_type: file.mimetype,
+      display_order: 0,
+      created_at: new Date().toISOString(),
+    };
   }
 
   /**
@@ -128,62 +96,43 @@ class ImageService {
   }
 
   /**
-   * Delete image and associated files
+   * Delete image from Cloudinary and its database record
    */
   static async deleteImage(imageId, productId) {
-    try {
-      // 1. Get image record
-      const image = await queryOne(
-        `SELECT * FROM product_images WHERE id = $1 AND product_id = $2`,
-        [imageId, productId]
-      );
+    const image = await queryOne(
+      `SELECT * FROM product_images WHERE id = $1 AND product_id = $2`,
+      [imageId, productId]
+    );
 
-      if (!image) {
-        throw new Error('Image not found');
-      }
-
-      // 2. Delete physical files
-      const fileName = path.basename(image.image_url);
-      const fileNameWithoutExt = path.parse(fileName).name;
-      const productDir = path.join(uploadDir, 'products', productId);
-
-      const files = [
-        path.join(productDir, `${fileNameWithoutExt}.jpg`),
-        path.join(productDir, `${fileNameWithoutExt}-thumb.jpg`),
-        path.join(productDir, `${fileNameWithoutExt}-mobile.jpg`),
-      ];
-
-      for (const filePath of files) {
-        if (fs.existsSync(filePath)) {
-          await fs.promises.unlink(filePath);
-        }
-      }
-
-      // 3. Delete database record
-      await query(
-        `DELETE FROM product_images WHERE id = $1`,
-        [imageId]
-      );
-
-      // 4. Reorder remaining images if this was primary
-      if (image.display_order === 0) {
-        const nextImage = await queryOne(
-          `SELECT id FROM product_images WHERE product_id = $1 ORDER BY created_at ASC LIMIT 1`,
-          [productId]
-        );
-
-        if (nextImage) {
-          await query(
-            `UPDATE product_images SET display_order = 0 WHERE id = $1`,
-            [nextImage.id]
-          );
-        }
-      }
-
-      return { success: true, message: `Image ${imageId} deleted successfully` };
-    } catch (error) {
-      throw error;
+    if (!image) {
+      throw new Error('Image not found');
     }
+
+    if (image.cloudinary_public_id) {
+      await cloudinary.uploader.destroy(image.cloudinary_public_id);
+    }
+
+    await query(
+      `DELETE FROM product_images WHERE id = $1`,
+      [imageId]
+    );
+
+    // Reorder remaining images if this was primary
+    if (image.display_order === 0) {
+      const nextImage = await queryOne(
+        `SELECT id FROM product_images WHERE product_id = $1 ORDER BY created_at ASC LIMIT 1`,
+        [productId]
+      );
+
+      if (nextImage) {
+        await query(
+          `UPDATE product_images SET display_order = 0 WHERE id = $1`,
+          [nextImage.id]
+        );
+      }
+    }
+
+    return { success: true, message: `Image ${imageId} deleted successfully` };
   }
 
   /**
@@ -227,32 +176,28 @@ class ImageService {
    * Reorder images for a product
    */
   static async reorderImages(productId, imageIds) {
-    try {
-      // Validate all images exist and belong to product
-      const images = await query(
-        `SELECT id FROM product_images WHERE product_id = $1`,
-        [productId]
-      );
+    // Validate all images exist and belong to product
+    const images = await query(
+      `SELECT id FROM product_images WHERE product_id = $1`,
+      [productId]
+    );
 
-      const existingIds = images.map(img => img.id);
-      const invalidIds = imageIds.filter(id => !existingIds.includes(id));
+    const existingIds = images.map(img => img.id);
+    const invalidIds = imageIds.filter(id => !existingIds.includes(id));
 
-      if (invalidIds.length > 0) {
-        throw new Error(`Invalid image IDs: ${invalidIds.join(', ')}`);
-      }
-
-      // Update display_order for each image
-      for (let i = 0; i < imageIds.length; i++) {
-        await query(
-          `UPDATE product_images SET display_order = $1 WHERE id = $2`,
-          [i, imageIds[i]]
-        );
-      }
-
-      return { success: true, message: 'Images reordered successfully' };
-    } catch (error) {
-      throw error;
+    if (invalidIds.length > 0) {
+      throw new Error(`Invalid image IDs: ${invalidIds.join(', ')}`);
     }
+
+    // Update display_order for each image
+    for (let i = 0; i < imageIds.length; i++) {
+      await query(
+        `UPDATE product_images SET display_order = $1 WHERE id = $2`,
+        [i, imageIds[i]]
+      );
+    }
+
+    return { success: true, message: 'Images reordered successfully' };
   }
 
   /**

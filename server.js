@@ -20,10 +20,6 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
 
-// Serve static files (uploads directory)
-const path = require('path');
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-
 // Swagger UI Documentation
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 

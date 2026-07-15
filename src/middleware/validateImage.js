@@ -1,22 +1,16 @@
 /**
  * Image Validation Middleware
- * Validates image dimensions, file signatures, and MIME types
+ * Validates image dimensions, file signatures, and MIME types directly
+ * from the in-memory upload buffer (no disk writes).
  */
 
 const sharp = require('sharp');
-const fs = require('fs');
-const path = require('path');
 
 /**
  * Check magic bytes (file signature) to prevent MIME type spoofing
  */
-async function validateMagicBytes(filePath) {
-  const fd = await fs.promises.open(filePath, 'r');
-  const buffer = Buffer.alloc(12);
-  await fd.read(buffer, 0, 12, 0);
-  await fd.close();
-
-  const hex = buffer.toString('hex');
+function validateMagicBytes(buffer) {
+  const hex = buffer.subarray(0, 12).toString('hex');
 
   // JPEG: FF D8 FF
   if (hex.startsWith('ffd8ff')) return true;
@@ -39,10 +33,7 @@ async function validateImageFiles(req, res, next) {
   try {
     for (const file of req.files) {
       // 1. Validate magic bytes
-      const isValidSignature = await validateMagicBytes(file.path);
-      if (!isValidSignature) {
-        // Delete the file
-        await fs.promises.unlink(file.path);
+      if (!validateMagicBytes(file.buffer)) {
         return res.status(422).json({
           success: false,
           error: {
@@ -54,13 +45,12 @@ async function validateImageFiles(req, res, next) {
 
       // 2. Validate dimensions using sharp
       try {
-        const metadata = await sharp(file.path).metadata();
+        const metadata = await sharp(file.buffer).metadata();
 
         const minWidth = parseInt(process.env.MIN_IMAGE_WIDTH || '300');
         const minHeight = parseInt(process.env.MIN_IMAGE_HEIGHT || '300');
 
         if (metadata.width < minWidth || metadata.height < minHeight) {
-          await fs.promises.unlink(file.path);
           return res.status(422).json({
             success: false,
             error: {
@@ -69,12 +59,7 @@ async function validateImageFiles(req, res, next) {
             },
           });
         }
-
-        // Store metadata in request for later use
-        if (!req.fileMetadata) req.fileMetadata = {};
-        req.fileMetadata[file.filename] = metadata;
       } catch (err) {
-        await fs.promises.unlink(file.path);
         return res.status(422).json({
           success: false,
           error: {

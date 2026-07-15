@@ -4,34 +4,17 @@
  */
 
 const request = require('supertest');
-const path = require('path');
-const fs = require('fs');
 
 // Note: These are integration test stubs
 // Full tests would require:
 // 1. Running Express app
 // 2. Real multipart form uploads
 // 3. Database setup/teardown
-// 4. Filesystem cleanup
+// 4. Mocked Cloudinary uploader
 
 describe('Image Upload Integration Tests', () => {
   const mockProductId = 'PRD001';
   const adminToken = 'test-admin-token';
-  const uploadDir = path.join(__dirname, '../../uploads/test');
-
-  beforeEach(() => {
-    // Create test upload directory
-    if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir, { recursive: true });
-    }
-  });
-
-  afterEach(() => {
-    // Cleanup test directory
-    if (fs.existsSync(uploadDir)) {
-      fs.rmSync(uploadDir, { recursive: true, force: true });
-    }
-  });
 
   describe('POST /api/images/admin/products/:id/upload', () => {
     test('should upload image successfully', async () => {
@@ -47,9 +30,9 @@ describe('Image Upload Integration Tests', () => {
             {
               id: 'IMG-001',
               product_id: mockProductId,
-              image_url: '/uploads/products/PRD001/img-001.jpg',
-              thumbnail_url: '/uploads/products/PRD001/img-001-thumb.jpg',
-              mobile_url: '/uploads/products/PRD001/img-001-mobile.jpg',
+              image_url: 'https://res.cloudinary.com/ly1x8sxn/image/upload/v1/giafabs/products/PRD001/img-001.jpg',
+              thumbnail_url: 'https://res.cloudinary.com/ly1x8sxn/image/upload/c_fill,h_150,w_150/giafabs/products/PRD001/img-001.jpg',
+              mobile_url: 'https://res.cloudinary.com/ly1x8sxn/image/upload/c_fill,w_600/giafabs/products/PRD001/img-001.jpg',
               alt_text: 'Front view',
               file_size: 2048576,
               mime_type: 'image/jpeg',
@@ -115,9 +98,9 @@ describe('Image Upload Integration Tests', () => {
             {
               id: 'IMG-001',
               product_id: mockProductId,
-              image_url: '/uploads/products/PRD001/img-001.jpg',
-              thumbnail_url: '/uploads/products/PRD001/img-001-thumb.jpg',
-              mobile_url: '/uploads/products/PRD001/img-001-mobile.jpg',
+              image_url: 'https://res.cloudinary.com/ly1x8sxn/image/upload/v1/giafabs/products/PRD001/img-001.jpg',
+              thumbnail_url: 'https://res.cloudinary.com/ly1x8sxn/image/upload/c_fill,h_150,w_150/giafabs/products/PRD001/img-001.jpg',
+              mobile_url: 'https://res.cloudinary.com/ly1x8sxn/image/upload/c_fill,w_600/giafabs/products/PRD001/img-001.jpg',
               alt_text: 'Front view',
               display_order: 0,
               created_at: '2026-07-14T10:30:00Z',
@@ -125,9 +108,9 @@ describe('Image Upload Integration Tests', () => {
             {
               id: 'IMG-002',
               product_id: mockProductId,
-              image_url: '/uploads/products/PRD001/img-002.jpg',
-              thumbnail_url: '/uploads/products/PRD001/img-002-thumb.jpg',
-              mobile_url: '/uploads/products/PRD001/img-002-mobile.jpg',
+              image_url: 'https://res.cloudinary.com/ly1x8sxn/image/upload/v1/giafabs/products/PRD001/img-002.jpg',
+              thumbnail_url: 'https://res.cloudinary.com/ly1x8sxn/image/upload/c_fill,h_150,w_150/giafabs/products/PRD001/img-002.jpg',
+              mobile_url: 'https://res.cloudinary.com/ly1x8sxn/image/upload/c_fill,w_600/giafabs/products/PRD001/img-002.jpg',
               alt_text: 'Back view',
               display_order: 1,
               created_at: '2026-07-14T10:31:00Z',

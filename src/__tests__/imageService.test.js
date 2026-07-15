@@ -1,11 +1,10 @@
 /**
  * Image Service Tests
- * Tests for image processing, storage, and database operations
+ * Tests for Cloudinary upload/delete and database operations
  */
 
 const ImageService = require('../services/imageService');
-const fs = require('fs');
-const path = require('path');
+const cloudinary = require('../config/cloudinary');
 const { query, queryOne } = require('../config/database');
 
 // Mock database queries
@@ -14,52 +13,72 @@ jest.mock('../config/database', () => ({
   queryOne: jest.fn(),
 }));
 
+// Mock Cloudinary client
+jest.mock('../config/cloudinary', () => ({
+  uploader: {
+    upload_stream: jest.fn(),
+    destroy: jest.fn(),
+  },
+}));
+
 describe('ImageService', () => {
   const mockProductId = 'PRD001';
   const mockFile = {
-    path: '/tmp/test-image.jpg',
+    buffer: Buffer.from('fake image'),
     originalname: 'test-image.jpg',
     size: 2048576,
     mimetype: 'image/jpeg',
   };
 
+  const mockCloudinaryResult = {
+    public_id: 'giafabs/products/PRD001/abc123',
+    secure_url: 'https://res.cloudinary.com/ly1x8sxn/image/upload/v1/giafabs/products/PRD001/abc123.jpg',
+    bytes: 2048576,
+    eager: [
+      { secure_url: 'https://res.cloudinary.com/ly1x8sxn/image/upload/c_fill,h_150,w_150/giafabs/products/PRD001/abc123.jpg' },
+      { secure_url: 'https://res.cloudinary.com/ly1x8sxn/image/upload/c_fill,w_600/giafabs/products/PRD001/abc123.jpg' },
+    ],
+  };
+
   beforeEach(() => {
     jest.clearAllMocks();
+    cloudinary.uploader.upload_stream.mockImplementation((options, callback) => {
+      callback(null, mockCloudinaryResult);
+      return { end: jest.fn() };
+    });
   });
 
   // ─────────── Upload Tests ───────────────────────────────────
 
   describe('processUploadedImage', () => {
-    test('should process image and create database record', async () => {
-      // This test would need sharp mocking or actual image file
-      // For now, we'll create a basic structure
-
-      // Mock file system
-      jest.spyOn(fs, 'existsSync').mockReturnValue(true);
-      jest.spyOn(fs.promises, 'readFile').mockResolvedValue(Buffer.from('fake image'));
-      jest.spyOn(fs.promises, 'stat').mockResolvedValue({ size: 2048576 });
-      jest.spyOn(fs.promises, 'unlink').mockResolvedValue(undefined);
-
-      // Mock database
+    test('should upload buffer to Cloudinary and create database record', async () => {
       query.mockResolvedValue([]);
-      queryOne.mockResolvedValue({
-        id: 'IMG-001',
-        product_id: mockProductId,
-        image_url: '/uploads/products/PRD001/img-001.jpg',
-        thumbnail_url: '/uploads/products/PRD001/img-001-thumb.jpg',
-        mobile_url: '/uploads/products/PRD001/img-001-mobile.jpg',
-        alt_text: 'Test image',
-        display_order: 0,
-      });
 
-      // Note: Full test would require mocking sharp library
-      // This is a structural test
-      expect(ImageService.processUploadedImage).toBeDefined();
+      const image = await ImageService.processUploadedImage(mockFile, mockProductId, 'Front view');
+
+      expect(cloudinary.uploader.upload_stream).toHaveBeenCalledWith(
+        expect.objectContaining({ folder: `giafabs/products/${mockProductId}` }),
+        expect.any(Function)
+      );
+      expect(query).toHaveBeenCalledWith(
+        expect.stringContaining('INSERT INTO product_images'),
+        expect.arrayContaining([mockCloudinaryResult.public_id])
+      );
+      expect(image.image_url).toBe(mockCloudinaryResult.secure_url);
+      expect(image.thumbnail_url).toBe(mockCloudinaryResult.eager[0].secure_url);
+      expect(image.mobile_url).toBe(mockCloudinaryResult.eager[1].secure_url);
+      expect(image.product_id).toBe(mockProductId);
     });
 
-    test('should validate file size before processing', () => {
-      const oversizeFile = { ...mockFile, size: 10485760 }; // 10MB
-      expect(oversizeFile.size).toBeGreaterThan(5242880);
+    test('should propagate Cloudinary upload errors', async () => {
+      cloudinary.uploader.upload_stream.mockImplementation((options, callback) => {
+        callback(new Error('Cloudinary upload failed'), null);
+        return { end: jest.fn() };
+      });
+
+      await expect(
+        ImageService.processUploadedImage(mockFile, mockProductId, '')
+      ).rejects.toThrow('Cloudinary upload failed');
     });
   });
 
@@ -71,16 +90,16 @@ describe('ImageService', () => {
         {
           id: 'IMG-001',
           product_id: mockProductId,
-          image_url: '/uploads/products/PRD001/img-001.jpg',
-          thumbnail_url: '/uploads/products/PRD001/img-001-thumb.jpg',
+          image_url: 'https://res.cloudinary.com/ly1x8sxn/image/upload/v1/giafabs/products/PRD001/img-001.jpg',
+          thumbnail_url: 'https://res.cloudinary.com/ly1x8sxn/image/upload/c_fill,h_150,w_150/giafabs/products/PRD001/img-001.jpg',
           display_order: 0,
           alt_text: 'Front view',
         },
         {
           id: 'IMG-002',
           product_id: mockProductId,
-          image_url: '/uploads/products/PRD001/img-002.jpg',
-          thumbnail_url: '/uploads/products/PRD001/img-002-thumb.jpg',
+          image_url: 'https://res.cloudinary.com/ly1x8sxn/image/upload/v1/giafabs/products/PRD001/img-002.jpg',
+          thumbnail_url: 'https://res.cloudinary.com/ly1x8sxn/image/upload/c_fill,h_150,w_150/giafabs/products/PRD001/img-002.jpg',
           display_order: 1,
           alt_text: 'Back view',
         },
@@ -113,7 +132,7 @@ describe('ImageService', () => {
       const mockImage = {
         id: 'IMG-001',
         product_id: mockProductId,
-        image_url: '/uploads/products/PRD001/img-001.jpg',
+        image_url: 'https://res.cloudinary.com/ly1x8sxn/image/upload/v1/giafabs/products/PRD001/img-001.jpg',
       };
 
       queryOne.mockResolvedValue(mockImage);
@@ -139,22 +158,21 @@ describe('ImageService', () => {
   // ─────────── Delete Tests ───────────────────────────────
 
   describe('deleteImage', () => {
-    test('should delete image and database record', async () => {
+    test('should destroy Cloudinary asset and delete database record', async () => {
       const mockImage = {
         id: 'IMG-001',
         product_id: mockProductId,
-        image_url: '/uploads/products/PRD001/img-001.jpg',
+        cloudinary_public_id: 'giafabs/products/PRD001/abc123',
         display_order: 0,
       };
 
       queryOne.mockResolvedValue(mockImage);
       query.mockResolvedValue([]);
-
-      jest.spyOn(fs, 'existsSync').mockReturnValue(true);
-      jest.spyOn(fs.promises, 'unlink').mockResolvedValue(undefined);
+      cloudinary.uploader.destroy.mockResolvedValue({ result: 'ok' });
 
       const result = await ImageService.deleteImage('IMG-001', mockProductId);
 
+      expect(cloudinary.uploader.destroy).toHaveBeenCalledWith(mockImage.cloudinary_public_id);
       expect(result.success).toBe(true);
       expect(query).toHaveBeenCalledWith(
         expect.stringContaining('DELETE FROM product_images'),
