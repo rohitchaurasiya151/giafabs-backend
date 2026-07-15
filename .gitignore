@@ -105,3 +105,8 @@ dist
 # OS metadata
 .DS_Store
 Thumbs.db
+
+# Uploaded product images (runtime data, not source) — keep the folder
+# structure via .gitkeep but never commit actual uploads.
+uploads/products/*
+!uploads/products/.gitkeep
