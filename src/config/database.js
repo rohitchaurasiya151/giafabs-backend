@@ -5,12 +5,23 @@
 
 const { Pool } = require('pg');
 
+const poolConfig = process.env.DATABASE_URL
+  ? {
+      connectionString: process.env.DATABASE_URL,
+      ssl: {
+        rejectUnauthorized: false
+      }
+    }
+  : {
+      host: process.env.PGHOST || 'localhost',
+      port: parseInt(process.env.PGPORT || '8090', 10),
+      user: process.env.PGUSER || 'postgres',
+      password: process.env.PGPASSWORD || 'EUogQFxWyDAsnY-bZNcRBnmxtbFK46M3',
+      database: process.env.PGDATABASE || 'bd_zb',
+    };
+
 const pool = new Pool({
-  host: process.env.PGHOST || 'localhost',
-  port: parseInt(process.env.PGPORT || '8090', 10),
-  user: process.env.PGUSER || 'postgres',
-  password: process.env.PGPASSWORD || 'EUogQFxWyDAsnY-bZNcRBnmxtbFK46M3',
-  database: process.env.PGDATABASE || 'bd_zb',
+  ...poolConfig,
   max: 20,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 5000,
