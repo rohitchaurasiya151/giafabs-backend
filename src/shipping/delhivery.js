@@ -58,41 +58,68 @@ async function fetchWaybill(cfg) {
   return String(res.waybill || res.data || res).trim();
 }
 
-// Maps our order object to Delhivery's create-order payload
-function buildDelhiveryPayload(order, cfg, waybill) {
+// Maps our order object to Delhivery's create-order payload. Delhivery's
+// docs disagree with themselves on a few field names (seller_gst_tin vs
+// seller_tin, products[] vs products_desc) — both variants are included
+// since extra unrecognized fields are harmless but a missing required one
+// isn't.
+function buildDelhiveryPayload(order, cfg, waybill, { paymentMode, codAmount, orderId } = {}) {
   const addr = order.shippingAddress;
+  const totalWeight = order.items.reduce((sum, i) => sum + (i.weight || 0.3) * i.qty, 0);
+  const today = new Date().toISOString().slice(0, 10);
 
   return {
-    client_name: cfg.clientName,
-    order_id: order.id,
-    waybill,
-    shipment_type: 'single_piece',
+    pickup_location: {
+      name: cfg.pickupLocation,
+      pin: cfg.pickupPincode || '',
+      add: cfg.pickupAddress || '',
+      city: cfg.pickupLocation,
+      state: cfg.pickupState || '',
+      country: 'India',
+      phone: cfg.pickupPhone || '',
+    },
+    shipments: [
+      {
+        name: order.customer.name,
+        add: addr.line1 || addr.address || '',
+        address_2: addr.line2 || '',
+        city: addr.city || '',
+        state: addr.state || '',
+        country: 'India',
+        phone: order.customer.mobile || '',
+        pin: addr.pincode || addr.zip || '',
 
-    pickup_location: cfg.pickupLocation,
-    seller_name: cfg.clientName,
-    seller_gst_tin: cfg.sellerGstTin || '',
+        order: orderId,
+        order_date: today,
+        waybill,
+        shipment_type: 'single_piece',
+        shipment_width: 20,
+        shipment_height: 5,
+        shipment_length: 25,
+        weight: totalWeight,
 
-    consignee_name: order.customer.name,
-    consignee_address: addr.line1 || addr.address || '',
-    consignee_address_2: addr.line2 || '',
-    consignee_city: addr.city || '',
-    consignee_phone: order.customer.mobile || '',
-    consignee_pin: addr.pincode || addr.zip || '',
-    consignee_state: addr.state || '',
-    country: 'IN',
+        payment_mode: paymentMode,
+        cod_amount: codAmount,
+        total_amount: order.pricing.total,
 
-    payment_mode: order.payment.method === 'cod' ? 'COD' : 'Prepaid',
-    cod_amount: order.payment.method === 'cod' ? order.pricing.total : 0,
+        products_desc: order.items.map(i => i.name).join(', '),
+        quantity: order.items.reduce((sum, i) => sum + i.qty, 0),
+        products: order.items.map(i => ({
+          name: i.name,
+          quantity: i.qty,
+          hsn_code: i.hsn || '',
+          price: i.unitPrice,
+        })),
 
-    products: order.items.map(i => ({
-      name: i.name,
-      quantity: i.qty,
-      hsn_code: i.hsn || '',
-      price: i.unitPrice,
-    })),
-
-    weight: order.items.reduce((sum, i) => sum + (i.weight || 0.3) * i.qty, 0),
-    dimensions: { length: 25, breadth: 20, height: 5 },
+        seller_name: cfg.clientName,
+        seller_add: cfg.pickupAddress || '',
+        seller_gst_tin: cfg.sellerGstTin || '',
+        seller_tin: cfg.sellerGstTin || '',
+        seller_cst: '',
+        seller_inv: orderId,
+        seller_inv_date: today,
+      },
+    ],
   };
 }
 
@@ -104,12 +131,21 @@ class DelhiveryProvider {
 
   async createShipment(order) {
     const waybill = await fetchWaybill(this.cfg);
-    const payload = buildDelhiveryPayload(order, this.cfg, waybill);
+    const isCod = order.payment.method === 'cod';
+    const payload = buildDelhiveryPayload(order, this.cfg, waybill, {
+      paymentMode: isCod ? 'COD' : 'Prepaid',
+      codAmount: isCod ? order.pricing.total : 0,
+      orderId: order.id,
+    });
 
     // Delhivery's create API takes a form-encoded body with the payload
     // JSON-stringified under a `data` key, not a raw JSON request body.
     const formBody = `format=json&data=${encodeURIComponent(JSON.stringify(payload))}`;
     const res = await apiRequest(this.cfg, 'POST', '/api/cmu/create.json', { formBody });
+
+    if (res?.error || res?.success === false) {
+      throw new Error(res?.rmk || 'Delhivery order creation failed');
+    }
 
     return {
       provider: 'delhivery',
@@ -164,45 +200,21 @@ class DelhiveryProvider {
   // relying on this in production.
   async createReversePickup(order, requestId) {
     const waybill = await fetchWaybill(this.cfg);
-    const addr = order.shippingAddress;
-
-    const payload = {
-      client_name: this.cfg.clientName,
-      order_id: `${order.id}-RET-${requestId}`,
-      waybill,
-      shipment_type: 'single_piece',
-
-      pickup_location: this.cfg.pickupLocation,
-      seller_name: this.cfg.clientName,
-      seller_gst_tin: this.cfg.sellerGstTin || '',
-
-      consignee_name: order.customer.name,
-      consignee_address: addr.line1 || addr.address || '',
-      consignee_address_2: addr.line2 || '',
-      consignee_city: addr.city || '',
-      consignee_phone: order.customer.mobile || '',
-      consignee_pin: addr.pincode || addr.zip || '',
-      consignee_state: addr.state || '',
-      country: 'IN',
-
-      payment_mode: 'Pickup',
-      cod_amount: 0,
-
-      products: order.items.map(i => ({
-        name: i.name,
-        quantity: i.qty,
-        hsn_code: i.hsn || '',
-        price: i.unitPrice,
-      })),
-
-      weight: order.items.reduce((sum, i) => sum + (i.weight || 0.3) * i.qty, 0),
-      dimensions: { length: 25, breadth: 20, height: 5 },
-    };
+    const orderId = `${order.id}-RET-${requestId}`;
+    const payload = buildDelhiveryPayload(order, this.cfg, waybill, {
+      paymentMode: 'Pickup',
+      codAmount: 0,
+      orderId,
+    });
 
     const formBody = `format=json&data=${encodeURIComponent(JSON.stringify(payload))}`;
     const res = await apiRequest(this.cfg, 'POST', '/api/cmu/create.json', { formBody });
 
-    return { provider: 'delhivery', orderId: payload.order_id, shipmentId: waybill, awb: waybill, raw: res };
+    if (res?.error || res?.success === false) {
+      throw new Error(res?.rmk || 'Delhivery reverse pickup creation failed');
+    }
+
+    return { provider: 'delhivery', orderId, shipmentId: waybill, awb: waybill, raw: res };
   }
 }
 
