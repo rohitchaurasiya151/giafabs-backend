@@ -1,12 +1,13 @@
 const jwt = require('jsonwebtoken');
+const config = require('../config');
 
 // Mock admin users (in production, query from database)
 const ADMIN_USERS = {
-  'admin@giafabs.com': {
+  [config.admin.email]: {
     id: 'admin-1',
-    email: 'admin@giafabs.com',
+    email: config.admin.email,
     name: 'Admin',
-    password: 'admin123', // In production, use hashed password
+    password: config.admin.initialPassword, // In production, use hashed password
     role: 'admin',
   },
 };
@@ -39,8 +40,8 @@ exports.loginAdmin = async (req, res) => {
         name: admin.name,
         role: 'admin',
       },
-      process.env.JWT_SECRET || 'secret',
-      { expiresIn: '7d' }
+      config.auth.jwtSecret,
+      { expiresIn: config.auth.jwtExpire }
     );
 
     res.json({

@@ -5,12 +5,13 @@
  */
 
 const multer = require('multer');
+const config = require('../config');
 
 const storage = multer.memoryStorage();
 
 // File filter to allow only images
 const fileFilter = (req, file, cb) => {
-  const allowedMimes = (process.env.ALLOWED_MIME_TYPES || 'image/jpeg,image/png,image/webp').split(',');
+  const allowedMimes = config.storage.allowedMimeTypes;
 
   if (allowedMimes.includes(file.mimetype)) {
     cb(null, true);
@@ -24,8 +25,8 @@ const upload = multer({
   storage,
   fileFilter,
   limits: {
-    fileSize: parseInt(process.env.MAX_FILE_SIZE || '5242880'), // 5MB default
-    files: parseInt(process.env.MAX_FILES_PER_PRODUCT || '10'),
+    fileSize: config.storage.maxFileSize,
+    files: config.storage.maxFilesPerProduct,
   },
 });
 

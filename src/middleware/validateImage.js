@@ -5,6 +5,7 @@
  */
 
 const sharp = require('sharp');
+const config = require('../config');
 
 /**
  * Check magic bytes (file signature) to prevent MIME type spoofing
@@ -47,8 +48,8 @@ async function validateImageFiles(req, res, next) {
       try {
         const metadata = await sharp(file.buffer).metadata();
 
-        const minWidth = parseInt(process.env.MIN_IMAGE_WIDTH || '300');
-        const minHeight = parseInt(process.env.MIN_IMAGE_HEIGHT || '300');
+        const minWidth = config.storage.minImageWidth;
+        const minHeight = config.storage.minImageHeight;
 
         if (metadata.width < minWidth || metadata.height < minHeight) {
           return res.status(422).json({

@@ -2,7 +2,7 @@
 // GIAFABS ENTERPRISE BACKEND v4
 // Fully-controlled commerce engine. Frontend reads config/content/flags from here.
 // ════════════════════════════════════════════════════════════════════════════════
-require('dotenv').config();
+const config = require('./src/config');
 const express = require('express');
 const cors = require('cors');
 const {
@@ -1616,14 +1616,14 @@ app.get('/api/db-status', async (req, res) => {
       dbReady,
       currentDb,
       tables,
-      envDatabaseUrlSet: !!process.env.DATABASE_URL
+      envDatabaseUrlSet: !!config.database.url
     });
   } catch (err) {
     res.status(500).json({
       success: false,
       dbReady,
       error: err.message,
-      envDatabaseUrlSet: !!process.env.DATABASE_URL
+      envDatabaseUrlSet: !!config.database.url
     });
   }
 });
@@ -1634,11 +1634,13 @@ app.get('/api/db-status', async (req, res) => {
 const imagesRouter = require('./src/routes/images');
 app.use('/api/images', imagesRouter);
 
-const PORT = process.env.PORT || 3001;
+const PORT = config.server.port;
 if (require.main === module) {
   app.listen(PORT, () => {
     console.log(`GIAFABS Enterprise Backend v4 on :${PORT}`);
-    console.log(`Admin: admin@giafabs.com / admin123`);
+    if (config.app.isDevelopment) {
+      console.log(`Admin: ${config.admin.email} / ${config.admin.initialPassword}`);
+    }
   });
 }
 module.exports = { app, DB };

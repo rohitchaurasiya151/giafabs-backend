@@ -1,4 +1,5 @@
 const jwt = require('jsonwebtoken');
+const config = require('../config');
 
 const adminAuth = async (req, res, next) => {
   try {
@@ -8,7 +9,7 @@ const adminAuth = async (req, res, next) => {
       return res.status(401).json({ error: 'Unauthorized: No token provided' });
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret');
+    const decoded = jwt.verify(token, config.auth.jwtSecret);
 
     if (decoded.role !== 'admin') {
       return res.status(403).json({ error: 'Forbidden: Admin access required' });

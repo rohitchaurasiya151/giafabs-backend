@@ -7,6 +7,7 @@ const express = require('express');
 const cors = require('cors');
 const routes = require('./routes');
 const errorHandler = require('./middleware/errorHandler');
+const config = require('./config');
 
 const app = express();
 
@@ -16,7 +17,7 @@ app.use(express.urlencoded({ extended: true }));
 
 // CORS
 app.use(cors({
-  origin: process.env.CORS_ORIGIN || '*',
+  origin: config.server.corsOrigin,
   credentials: true
 }));
 

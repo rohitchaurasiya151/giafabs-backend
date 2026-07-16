@@ -2,34 +2,13 @@
 // GIAFABS — PostgreSQL Database Layer
 // Proper normalized schema with typed columns + indexes
 // ════════════════════════════════════════════════════════════════════════════════
-const { Pool } = require('pg');
 const { DB } = require('./data');
-
-const poolConfig = process.env.DATABASE_URL
-  ? { 
-      connectionString: process.env.DATABASE_URL,
-      ssl: {
-        rejectUnauthorized: false
-      }
-    }
-  : {
-      host:     process.env.PGHOST     || 'localhost',
-      port:     parseInt(process.env.PGPORT || '8090', 10),
-      user:     process.env.PGUSER     || 'postgres',
-      password: process.env.PGPASSWORD || 'EUogQFxWyDAsnY-bZNcRBnmxtbFK46M3',
-      database: process.env.PGDATABASE || 'bd_zb',
-    };
-
-const pool = new Pool({
-  ...poolConfig,
-  max: 10,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 5000,
-});
+const config = require('./src/config');
+const { pool } = require('./src/config/database');
 
 // ── SCHEMA ────────────────────────────────────────────────────────────────────
 async function initDB(DB) {
-  if (process.env.NODE_ENV === 'test') {
+  if (config.app.isTest) {
     console.log('[DB] Test mode — dropping and recreating all tables...');
     await pool.query(`
       DROP TABLE IF EXISTS

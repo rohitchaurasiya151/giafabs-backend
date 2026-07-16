@@ -6,10 +6,11 @@
 const cloudinary = require('../config/cloudinary');
 const { query, queryOne } = require('../config/database');
 const { genId } = require('../../core');
+const config = require('../config');
 
-const thumbWidth = parseInt(process.env.THUMBNAIL_WIDTH || '150');
-const thumbHeight = parseInt(process.env.THUMBNAIL_HEIGHT || '150');
-const mobileWidth = parseInt(process.env.MOBILE_WIDTH || '600');
+const thumbWidth = config.storage.thumbnailWidth;
+const thumbHeight = config.storage.thumbnailHeight;
+const mobileWidth = config.storage.mobileWidth;
 
 /**
  * Upload a buffer to Cloudinary via the streaming API (avoids writing

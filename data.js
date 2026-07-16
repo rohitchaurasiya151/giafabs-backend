@@ -2,6 +2,7 @@
 // GIAFABS DATA LAYER — seed data. In production this maps to PostgreSQL tables.
 // ════════════════════════════════════════════════════════════════════════════════
 const { hashPw } = require('./core');
+const config = require('./src/config');
 
 const DB = {
   // ─────────── WOMEN'S FASHION PRODUCTS ───────────
@@ -60,7 +61,7 @@ const DB = {
   ],
 
   users: [
-    {id:'U001',name:'Super Admin',email:'admin@giafabs.com',passwordHash:hashPw('admin123'),role:'superadmin',permissions:['*'],active:true},
+    {id:'U001',name:'Super Admin',email:config.admin.email,passwordHash:hashPw(config.admin.initialPassword),role:'superadmin',permissions:['*'],active:true},
     {id:'U002',name:'Store Manager',email:'manager@giafabs.com',passwordHash:hashPw('manager123'),role:'manager',permissions:[],active:true},
     {id:'U003',name:'Support Agent',email:'support@giafabs.com',passwordHash:hashPw('support123'),role:'support',permissions:[],active:true},
   ],

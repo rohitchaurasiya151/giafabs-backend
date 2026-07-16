@@ -1,23 +1,25 @@
 /**
  * Database Configuration
- * Manages PostgreSQL connection pool and query execution
+ * Owns the single PostgreSQL connection pool (shared with db-postgres.js)
+ * and exposes query execution helpers.
  */
 
 const { Pool } = require('pg');
+const config = require('./index');
 
-const poolConfig = process.env.DATABASE_URL
+const poolConfig = config.database.url
   ? {
-      connectionString: process.env.DATABASE_URL,
+      connectionString: config.database.url,
       ssl: {
         rejectUnauthorized: false
       }
     }
   : {
-      host: process.env.PGHOST || 'localhost',
-      port: parseInt(process.env.PGPORT || '8090', 10),
-      user: process.env.PGUSER || 'postgres',
-      password: process.env.PGPASSWORD || 'EUogQFxWyDAsnY-bZNcRBnmxtbFK46M3',
-      database: process.env.PGDATABASE || 'bd_zb',
+      host: config.database.host,
+      port: config.database.port,
+      user: config.database.user,
+      password: config.database.password,
+      database: config.database.database,
     };
 
 const pool = new Pool({

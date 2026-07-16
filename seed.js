@@ -3,16 +3,8 @@
 // Drops all data and re-inserts everything from data.js with ON CONFLICT UPDATE
 // Run: node seed.js
 // ════════════════════════════════════════════════════════════════════════════════
-const { Pool } = require('pg');
 const { DB } = require('./data');
-
-const pool = new Pool({
-  host:     process.env.PGHOST     || 'localhost',
-  port:     parseInt(process.env.PGPORT || '8090', 10),
-  user:     process.env.PGUSER     || 'postgres',
-  password: process.env.PGPASSWORD || 'EUogQFxWyDAsnY-bZNcRBnmxtbFK46M3',
-  database: process.env.PGDATABASE || 'bd_zb',
-});
+const { pool } = require('./src/config/database');
 
 // ── HELPERS ──────────────────────────────────────────────────────────────────
 async function upsertRow(table, row, conflictKey = 'id') {
