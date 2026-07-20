@@ -549,7 +549,7 @@ function rowToVariant(r) {
 function customerToRow(c) {
   return {
     id: c.id, name: c.name, email: c.email,
-    phone: c.phone || null,
+    phone: c.mobile || null,
     password_hash: c.passwordHash,
     gstin: c.gstin || null,
     active: c.active !== false,
@@ -559,7 +559,7 @@ function customerToRow(c) {
 function rowToCustomer(r) {
   return {
     id: r.id, name: r.name, email: r.email,
-    phone: r.phone, passwordHash: r.password_hash,
+    mobile: r.phone, passwordHash: r.password_hash,
     gstin: r.gstin, active: r.active,
     createdAt: r.created_at,
   };
@@ -634,7 +634,7 @@ function rowToOrder(r) {
   return {
     id: r.id,
     customerId: r.customer_id,
-    customer: customer ? { name: customer.name, email: customer.email, mobile: customer.phone || '' } : { name: '', email: '', mobile: '' },
+    customer: customer ? { name: customer.name, email: customer.email, mobile: customer.mobile || '' } : { name: '', email: '', mobile: '' },
     status: r.status,
     items,
     shippingAddress,

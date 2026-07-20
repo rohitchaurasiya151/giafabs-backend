@@ -19,6 +19,16 @@ const DB = {
     {id:'PRD010',sku:'WSHL001',name:'Pashmina Wool Shawl',description:'Premium Kashmiri pashmina shawl — soft, warm and luxurious.',category:'Accessories',subcategory:'Shawls',brand:'Kashmir Classics',price:4999,mrp:9999,b2bPrice:3599,cost:2800,fabric:'Pashmina',color:'Cream',sizes:['Freesize'],gst:12,hsn:'62091100',weight:0.35,stock:22,minStock:3,active:true,featured:true,isNew:false,badge:'Premium',rating:4.9,reviews:55,international:true,tags:['accessory','shawl','luxury'],images:['shawl-pashmina']},
   ],
 
+  // ─────────── PRODUCT CATEGORIES (dynamic — admin-managed) ───────────
+  categories: [
+    {name:'Kurtas',       slug:'kurtas',       gstRate:12, active:true, sortOrder:1},
+    {name:'Sarees',       slug:'sarees',       gstRate:5,  active:true, sortOrder:2},
+    {name:'Salwar Suits', slug:'salwar-suits', gstRate:12, active:true, sortOrder:3},
+    {name:'Lehengas',     slug:'lehengas',     gstRate:5,  active:true, sortOrder:4},
+    {name:'Western Wear', slug:'western-wear', gstRate:12, active:true, sortOrder:5},
+    {name:'Accessories',  slug:'accessories',  gstRate:12, active:true, sortOrder:6},
+  ],
+
   orders: [
     {id:'GIAFABS0001',createdAt:'2026-07-10T10:00:00Z',updatedAt:'2026-07-12T15:30:00Z',type:'b2c',customer:{name:'Priya Sharma',email:'priya.sharma@example.com',mobile:'9876543210'},shippingAddress:{firstName:'Priya',lastName:'Sharma',line1:'123 Fashion Street',line2:'Apt 4B',city:'Mumbai',state:'Maharashtra',pincode:'400001',country:'India',countryCode:'IN'},items:[{productId:'PRD001',size:'M',name:'Emerald Silk Kurta with Embroidery',sku:'WKTA001',hsn:'61103090',gstRate:12,unitPrice:2499,qty:1,lineSubtotal:2499,lineGst:300}],payment:{method:'cod',status:'pending',transactionId:null,gatewayOrderId:null},pricing:{subtotal:2499,gst:300,discount:0,coupon:null,shipping:49,codCharge:50,total:2898,currency:'INR',currencySymbol:'₹',fxRate:1,totalInCurrency:2898},tax:{gstin:'07AAJPT5055K1Z0',state:'Maharashtra',label:'CGST + SGST (intra-state)'},status:'delivered',isInternational:false,tracking:{partner:'Delhivery',awb:'DLV1234567890',providerOrderId:'SR123456',history:[{label:'Order Placed',done:true,time:'2026-07-10T10:00:00Z'},{label:'Order Confirmed (COD)',done:true,time:'2026-07-10T10:15:00Z'},{label:'Shipment Created',done:true,time:'2026-07-10T11:00:00Z'},{label:'Order Delivered',done:true,time:'2026-07-12T15:30:00Z'}]},shippingStatus:'delivered'}
   ],
@@ -144,7 +154,7 @@ const DB = {
       ccavenue:  { category:'payment', label:'CCAvenue',  enabled:false, mode:'test', merchantId:'', accessCode:'', workingKey:'', webhookSecret:'', status:'disconnected', fee:'2%' },
       // SHIPPING / LOGISTICS
       shiprocket:{ category:'shipping', label:'Shiprocket (multi-courier)', enabled:true, email:'', password:'', channelId:'', pickupPincode:'395002', autoPush:true, webhookSecret:'', status:'connected' },
-      delhivery: { category:'shipping', label:'Delhivery (direct)', enabled:false, apiToken:'', clientName:'', pickupLocation:'', sellerGstTin:'', pickupPincode:'395002', autoPush:false, status:'disconnected' },
+      delhivery: { category:'shipping', label:'Delhivery (direct)', enabled:false, apiToken:'', clientName:'', pickupLocation:'', pickupAddress:'', pickupState:'', pickupPhone:'', sellerGstTin:'', pickupPincode:'395002', autoPush:false, status:'disconnected' },
       bluedart:  { category:'shipping', label:'Bluedart', enabled:false, licenseKey:'', loginId:'', status:'disconnected' },
       dtdc:      { category:'shipping', label:'DTDC', enabled:false, accessToken:'', customerCode:'', status:'disconnected' },
       porter:    { category:'shipping', label:'Porter (hyperlocal)', enabled:false, apiKey:'', status:'disconnected' },

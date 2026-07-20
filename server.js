@@ -733,11 +733,79 @@ app.post('/api/shipping/push/:orderId', requireAdmin('orders.update'), async (re
   if (!order) return res.status(404).json({ error: 'Order not found' });
   if (order.shippingStatus === 'dispatched') return res.status(409).json({ error: 'Already dispatched', order });
 
-  const { autoDispatchOrder } = require('./src/shipping');
-  const shipping = await autoDispatchOrder(order, DB);
+  const shipping = await autoDispatchOrder(order, DB, { requireAutoPush: false });
   audit(req.user.email, 'SHIPPING_MANUAL_PUSH', order.id, { result: shipping.reason });
   syncDB('orders', DB);
   res.json({ success: true, shipping, order });
+});
+
+// Bulk push: dispatch multiple orders in one request. Uses the active
+// provider's createBulkShipments (single batched API call) when available,
+// otherwise falls back to looping the single-order autoDispatchOrder.
+app.post('/api/shipping/push/bulk', requireAdmin('orders.update'), async (req, res) => {
+  const { orderIds } = req.body || {};
+  if (!Array.isArray(orderIds) || !orderIds.length) return res.status(400).json({ error: 'orderIds required' });
+
+  const provider = getActiveShippingProvider(DB, { requireAutoPush: false });
+  if (!provider) return res.status(400).json({ error: 'No shipping provider configured' });
+
+  const orders = orderIds.map(id => DB.orders.find(o => o.id === id)).filter(Boolean);
+  const results = { pushed: [], failed: [], outOfStock: [] };
+
+  if (typeof provider.createBulkShipments === 'function') {
+    const eligible = [];
+    for (const order of orders) {
+      if (order.shippingStatus === 'dispatched') { results.failed.push({ orderId: order.id, reason: 'already_dispatched' }); continue; }
+      const stockCheck = checkFulfillableStock(order, DB);
+      if (!stockCheck.ok) {
+        order.shippingStatus = 'awaiting_stock';
+        order.shippingNote = `Out of stock: ${stockCheck.outOfStock.join(', ')}`;
+        order.updatedAt = new Date().toISOString();
+        results.outOfStock.push({ orderId: order.id, items: stockCheck.outOfStock });
+        continue;
+      }
+      eligible.push(order);
+    }
+    if (eligible.length) {
+      try {
+        const shipResults = await provider.createBulkShipments(eligible);
+        eligible.forEach((order, i) => {
+          const result = shipResults[i];
+          order.tracking.partner = result.provider;
+          order.tracking.shipmentId = result.shipmentId;
+          order.tracking.providerOrderId = result.orderId;
+          if (result.awb) { order.tracking.awb = result.awb; order.tracking.trackingUrl = result.trackingUrl; }
+          order.shippingStatus = 'dispatched';
+          order.updatedAt = new Date().toISOString();
+          order.tracking.history.push({
+            label: `Shipment created (${result.provider})${result.awb ? ' · AWB: ' + result.awb : ''}`,
+            done: true,
+            time: order.updatedAt,
+          });
+          results.pushed.push({ orderId: order.id, awb: result.awb });
+        });
+      } catch (e) {
+        const reason = e?.body?.message || e?.message || 'Bulk dispatch failed';
+        eligible.forEach(order => {
+          order.shippingStatus = 'dispatch_failed';
+          order.shippingNote = reason;
+          order.updatedAt = new Date().toISOString();
+          results.failed.push({ orderId: order.id, reason });
+        });
+      }
+    }
+  } else {
+    for (const order of orders) {
+      const r = await autoDispatchOrder(order, DB, { requireAutoPush: false });
+      if (r.pushed) results.pushed.push({ orderId: order.id, awb: r.result?.awb });
+      else if (r.reason === 'out_of_stock') results.outOfStock.push({ orderId: order.id, items: r.outOfStock });
+      else results.failed.push({ orderId: order.id, reason: r.message });
+    }
+  }
+
+  audit(req.user.email, 'SHIPPING_BULK_PUSH', null, { count: orderIds.length, pushed: results.pushed.length });
+  syncDB('orders', DB);
+  res.json({ success: true, ...results });
 });
 
 // Cancel shipment in Shiprocket + update local order
@@ -745,7 +813,7 @@ app.post('/api/shipping/cancel/:orderId', requireAdmin('orders.update'), async (
   const order = DB.orders.find(o => o.id === req.params.orderId);
   if (!order) return res.status(404).json({ error: 'Order not found' });
 
-  const provider = getActiveShippingProvider(DB);
+  const provider = getActiveShippingProvider(DB, { requireAutoPush: false });
   if (provider && order.tracking.providerOrderId) {
     try {
       await provider.cancelShipment([order.tracking.providerOrderId]);
@@ -767,7 +835,7 @@ app.get('/api/shipping/track/:orderId', requireAdmin('orders.read'), async (req,
   if (!order) return res.status(404).json({ error: 'Order not found' });
   if (!order.tracking.awb) return res.status(400).json({ error: 'No AWB assigned yet' });
 
-  const provider = getActiveShippingProvider(DB);
+  const provider = getActiveShippingProvider(DB, { requireAutoPush: false });
   if (!provider) return res.status(400).json({ error: 'No shipping provider configured' });
 
   try {
@@ -784,7 +852,7 @@ app.get('/api/shipping/label/:orderId', requireAdmin('orders.read'), async (req,
   if (!order) return res.status(404).json({ error: 'Order not found' });
   if (!order.tracking.shipmentId) return res.status(400).json({ error: 'No shipment created yet' });
 
-  const provider = getActiveShippingProvider(DB);
+  const provider = getActiveShippingProvider(DB, { requireAutoPush: false });
   if (!provider) return res.status(400).json({ error: 'No shipping provider configured' });
 
   try {
@@ -829,6 +897,118 @@ app.post('/api/shipping/webhook/shiprocket', express.json(), (req, res) => {
   }
 
   res.json({ received: true });
+});
+
+// Delhivery webhook — they POST status updates here automatically.
+// Set this URL in Delhivery's dashboard → Integration → Webhooks.
+// Payload shape isn't fully documented publicly — handled defensively for
+// both the nested `{ Shipment: {...} }` shape and a flatter fallback.
+app.post('/api/shipping/webhook/delhivery', express.json(), (req, res) => {
+  const shipment = req.body?.Shipment || req.body?.shipment || req.body || {};
+  const awb = shipment.AWB || shipment.awb || req.body?.waybill;
+  const statusText = shipment?.Status?.Status || shipment?.status || '';
+  if (!awb) return res.status(400).json({ error: 'Missing AWB' });
+
+  const order = DB.orders.find(o => o.tracking.awb === awb);
+  if (!order) return res.status(404).json({ error: 'Order not found for this AWB' });
+
+  const statusMap = {
+    'MANIFESTED': 'confirmed',
+    'IN TRANSIT': 'shipped',
+    'DISPATCHED': 'shipped',
+    'PENDING': 'shipped', // undelivered / NDR — pull /api/shipping/ndr for the reason
+    'DELIVERED': 'delivered',
+    'RTO': 'returned',
+    'DTO': 'returned',
+    'CANCELLED': 'cancelled',
+  };
+
+  const newStatus = statusMap[statusText?.toUpperCase()];
+  if (newStatus && order.status !== newStatus) {
+    order.status = newStatus;
+    order.updatedAt = new Date().toISOString();
+    order.tracking.history.push({ label: `Delhivery: ${statusText}`, done: true, time: order.updatedAt });
+    syncDB('orders', DB);
+  }
+
+  res.json({ received: true });
+});
+
+// NDR (non-delivery report) lookup for an order's shipment — only
+// supported by providers that implement getNdrShipments (currently Delhivery).
+app.get('/api/shipping/ndr/:orderId', requireAdmin('orders.read'), async (req, res) => {
+  const order = DB.orders.find(o => o.id === req.params.orderId);
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+  if (!order.tracking.awb) return res.status(400).json({ error: 'No AWB assigned yet' });
+
+  const provider = getActiveShippingProvider(DB, { requireAutoPush: false });
+  if (!provider || typeof provider.getNdrShipments !== 'function') {
+    return res.status(400).json({ error: 'NDR lookup not supported by the active shipping provider' });
+  }
+
+  try {
+    const ndr = await provider.getNdrShipments([order.tracking.awb]);
+    res.json({ success: true, awb: order.tracking.awb, ndr });
+  } catch (e) {
+    res.status(502).json({ error: 'NDR lookup failed', detail: e?.body || e });
+  }
+});
+
+// Submit a re-attempt/RTO/deferred instruction for an NDR'd shipment —
+// only supported by providers that implement actionNdr (currently Delhivery).
+app.post('/api/shipping/ndr/:orderId/action', requireAdmin('orders.update'), async (req, res) => {
+  const order = DB.orders.find(o => o.id === req.params.orderId);
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+  if (!order.tracking.awb) return res.status(400).json({ error: 'No AWB assigned yet' });
+
+  const { action, comment, reattemptDate } = req.body || {};
+  if (!action) return res.status(400).json({ error: 'action is required' });
+
+  const provider = getActiveShippingProvider(DB, { requireAutoPush: false });
+  if (!provider || typeof provider.actionNdr !== 'function') {
+    return res.status(400).json({ error: 'NDR actions not supported by the active shipping provider' });
+  }
+
+  try {
+    const result = await provider.actionNdr(order.tracking.awb, action, { comment, reattemptDate });
+    order.updatedAt = new Date().toISOString();
+    order.tracking.history.push({ label: `NDR action: ${action}${comment ? ' — ' + comment : ''}`, done: true, time: order.updatedAt });
+    audit(req.user.email, 'SHIPPING_NDR_ACTION', order.id, { action });
+    syncDB('orders', DB);
+    res.json({ success: true, result, order });
+  } catch (e) {
+    res.status(502).json({ error: 'NDR action failed', detail: e?.body || e });
+  }
+});
+
+// Attaches a GST e-way bill number to an already-created shipment — required
+// for shipments with invoice value > ₹50k. The e-way bill itself must already
+// be generated on the government e-way bill portal; this just registers its
+// number against the shipment. Only supported by providers that implement
+// updateEwaybill (currently Delhivery).
+app.post('/api/shipping/ewaybill/:orderId', requireAdmin('orders.update'), async (req, res) => {
+  const order = DB.orders.find(o => o.id === req.params.orderId);
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+  if (!order.tracking.awb) return res.status(400).json({ error: 'No AWB assigned yet' });
+
+  const { ewbn, dcn } = req.body || {};
+  if (!ewbn) return res.status(400).json({ error: 'ewbn (e-way bill number) is required' });
+
+  const provider = getActiveShippingProvider(DB, { requireAutoPush: false });
+  if (!provider || typeof provider.updateEwaybill !== 'function') {
+    return res.status(400).json({ error: 'E-way bill update not supported by the active shipping provider' });
+  }
+
+  try {
+    const result = await provider.updateEwaybill(order.tracking.awb, { ewbn, dcn: dcn || order.id });
+    order.updatedAt = new Date().toISOString();
+    order.tracking.history.push({ label: `E-way bill attached: ${ewbn}`, done: true, time: order.updatedAt });
+    audit(req.user.email, 'SHIPPING_EWAYBILL_UPDATE', order.id, { ewbn });
+    syncDB('orders', DB);
+    res.json({ success: true, result, order });
+  } catch (e) {
+    res.status(502).json({ error: 'E-way bill update failed', detail: e?.body || e });
+  }
 });
 
 // ════════════════════════════════════════════════════════════════════════════════
@@ -1066,7 +1246,7 @@ app.patch('/api/shipping/config', requireAdmin('shipping.*'), (req, res) => { Ob
 app.post('/api/shipping/zones', requireAdmin('shipping.*'), (req, res) => { const z={ id:genId('z_',DB.settings.shipping.zones.length+1,3), ...req.body }; DB.settings.shipping.zones.push(z); syncDB('settings', DB); audit(req.user.email,'SHIPPING_ZONE_ADD',z.id); res.json({ success:true, zone:z }); });
 app.patch('/api/shipping/zones/:id', requireAdmin('shipping.*'), (req, res) => { const z=DB.settings.shipping.zones.find(x=>x.id===req.params.id); if(!z)return res.status(404).json({error:'Zone not found'}); Object.assign(z,req.body); syncDB('settings', DB); res.json({ success:true, zone:z }); });
 app.delete('/api/shipping/zones/:id', requireAdmin('shipping.*'), (req, res) => { DB.settings.shipping.zones=DB.settings.shipping.zones.filter(x=>x.id!==req.params.id); syncDB('settings', DB); res.json({ success:true }); });
-// COD serviceability check for a pincode
+// COD serviceability check for a pincode (static allow/blocklist)
 app.get('/api/shipping/cod-check/:pincode', (req, res) => {
   const sh = DB.settings.shipping; const pin = req.params.pincode;
   let serviceable;
@@ -1074,14 +1254,50 @@ app.get('/api/shipping/cod-check/:pincode', (req, res) => {
   else serviceable = !(sh.codServiceablePincodes.__blocked || []).includes(pin); // blocklist_off = allow all
   res.json({ pincode: pin, codServiceable: serviceable, estimatedDays: sh.estimatedDaysDomestic });
 });
-// live rate calc by zone + weight
-app.post('/api/shipping/rate', (req, res) => {
-  const { countryCode='IN', weightKg=0.4, orderValue=0 } = req.body;
+// Live pincode serviceability via the active shipping provider (e.g. Delhivery's
+// pin-code API), falling back to the static allow/blocklist above when no
+// provider is configured or it doesn't support a serviceability check.
+app.get('/api/shipping/serviceability/:pincode', async (req, res) => {
+  const pin = req.params.pincode;
+  const provider = getActiveShippingProvider(DB, { requireAutoPush: false });
+
+  if (provider && typeof provider.checkServiceability === 'function') {
+    try {
+      const result = await provider.checkServiceability(pin);
+      return res.json({ source: 'provider', ...result });
+    } catch (e) {
+      console.warn('[Shipping] Live serviceability check failed, falling back:', e?.body || e);
+    }
+  }
+
+  const sh = DB.settings.shipping;
+  const serviceable = sh.codPincodeMode === 'allowlist'
+    ? sh.codServiceablePincodes.includes(pin)
+    : !(sh.codServiceablePincodes.__blocked || []).includes(pin);
+  res.json({ source: 'static', pincode: pin, serviceable, codAvailable: serviceable, estimatedDays: sh.estimatedDaysDomestic });
+});
+// live rate calc by zone + weight, with an optional live provider quote
+// (e.g. Delhivery's invoice/charges API) when a destPincode is supplied
+app.post('/api/shipping/rate', async (req, res) => {
+  const { countryCode='IN', weightKg=0.4, orderValue=0, destPincode, paymentMode } = req.body;
   const sh = DB.settings.shipping;
   const zone = sh.zones.find(z => z.countries.includes(countryCode)) || sh.zones[0];
   if (zone.freeAbove && orderValue >= zone.freeAbove) return res.json({ zone:zone.name, rate:0, free:true });
+
+  if (destPincode) {
+    const provider = getActiveShippingProvider(DB, { requireAutoPush: false });
+    if (provider && typeof provider.calculateRate === 'function') {
+      try {
+        const live = await provider.calculateRate({ destPincode, weightGrams: weightKg * 1000, paymentMode, orderValue });
+        if (live.total != null) return res.json({ source: 'provider', zone: zone.name, rate: live.total, free: false, weightKg });
+      } catch (e) {
+        console.warn('[Shipping] Live rate lookup failed, falling back to static table:', e?.body || e);
+      }
+    }
+  }
+
   const slab = zone.slabs.find(s => weightKg <= s.uptoKg) || zone.slabs[zone.slabs.length-1];
-  res.json({ zone:zone.name, rate:slab.price, free:false, weightKg });
+  res.json({ source: 'static', zone:zone.name, rate:slab.price, free:false, weightKg });
 });
 
 // ════════════════════════════════════════════════════════════════════════════════
@@ -1203,7 +1419,7 @@ app.post('/api/orders/:id/cancel', async (req, res) => {
   // Cancel shipment in Shiprocket if already pushed
   if (order.tracking?.providerOrderId) {
     try {
-      const provider = getActiveShippingProvider(DB);
+      const provider = getActiveShippingProvider(DB, { requireAutoPush: false });
       if (provider) await provider.cancelShipment([order.tracking.providerOrderId]);
     } catch (e) {
       console.warn('[Shipping] Shiprocket cancel on order cancel failed:', e?.body || e);
@@ -1369,12 +1585,12 @@ app.patch('/api/order-requests/:id/status', requireAdmin('orders.update'), async
     request.status = 'approved';
     request.updatedAt = now;
 
-    const provider = getActiveShippingProvider(DB);
+    const provider = getActiveShippingProvider(DB, { requireAutoPush: false });
     if (provider) {
       try {
         const revRes = await provider.createReversePickup(order, request.id);
-        request.reverseShipmentId = String(revRes.shipment_id || '');
-        request.reverseAWB = revRes.awb_code || null;
+        request.reverseShipmentId = String(revRes.shipmentId || '');
+        request.reverseAWB = revRes.awb || null;
         request.status = 'pickup_scheduled';
       } catch (e) {
         console.warn('[Shipping] Reverse pickup failed:', e?.body || e);
@@ -1471,7 +1687,7 @@ app.patch('/api/order-requests/:id/status', requireAdmin('orders.update'), async
         });
 
         // Ship exchange item via Shiprocket
-        const provider = getActiveShippingProvider(DB);
+        const provider = getActiveShippingProvider(DB, { requireAutoPush: false });
         if (provider) {
           try {
             const exchangeOrder = {

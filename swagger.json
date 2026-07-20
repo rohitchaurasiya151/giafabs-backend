@@ -338,6 +338,383 @@
           "200": { "description": "Ticket filed" }
         }
       }
+    },
+    "/api/shipping/push/{orderId}": {
+      "post": {
+        "summary": "Dispatch Order Shipment",
+        "description": "Manually triggers dispatch of a confirmed order to the active auto-push shipping provider (Shiprocket or Delhivery, per courierPriority). Checks fulfillable stock before pushing.",
+        "security": [{ "AdminAuth": [] }],
+        "parameters": [
+          { "name": "orderId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Dispatch attempted; see shipping.reason for outcome (success, out_of_stock, no_provider, provider_error)" },
+          "404": { "description": "Order not found" },
+          "409": { "description": "Order already dispatched" }
+        }
+      }
+    },
+    "/api/shipping/push/bulk": {
+      "post": {
+        "summary": "Bulk Dispatch Orders",
+        "description": "Dispatches multiple orders in one request. Uses the active provider's batched create-shipment call when supported (currently Delhivery); otherwise loops the single-order dispatch per order (e.g. Shiprocket).",
+        "security": [{ "AdminAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["orderIds"],
+                "properties": {
+                  "orderIds": { "type": "array", "items": { "type": "string" }, "example": ["ORD001", "ORD002"] }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Returns { pushed, failed, outOfStock } arrays summarizing the batch result" },
+          "400": { "description": "orderIds missing or no shipping provider configured" }
+        }
+      }
+    },
+    "/api/shipping/cancel/{orderId}": {
+      "post": {
+        "summary": "Cancel Shipment",
+        "description": "Cancels the shipment with the active shipping provider and marks the order's shipping status as cancelled locally.",
+        "security": [{ "AdminAuth": [] }],
+        "parameters": [
+          { "name": "orderId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Shipment cancelled" },
+          "404": { "description": "Order not found" },
+          "502": { "description": "Provider cancel call failed" }
+        }
+      }
+    },
+    "/api/shipping/track/{orderId}": {
+      "get": {
+        "summary": "Track Shipment",
+        "description": "Pulls live tracking status from the active shipping provider using the order's AWB.",
+        "security": [{ "AdminAuth": [] }],
+        "parameters": [
+          { "name": "orderId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Tracking data returned" },
+          "400": { "description": "No AWB assigned yet, or no provider configured" },
+          "502": { "description": "Tracking fetch failed" }
+        }
+      }
+    },
+    "/api/shipping/label/{orderId}": {
+      "get": {
+        "summary": "Generate Shipping Label",
+        "description": "Requests a packing slip / shipping label from the active shipping provider for the order's shipment.",
+        "security": [{ "AdminAuth": [] }],
+        "parameters": [
+          { "name": "orderId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Label data/URL returned" },
+          "400": { "description": "No shipment created yet, or no provider configured" },
+          "502": { "description": "Label generation failed" }
+        }
+      }
+    },
+    "/api/shipping/webhook/shiprocket": {
+      "post": {
+        "summary": "Shiprocket Status Webhook",
+        "description": "Receives automatic shipment status push notifications from Shiprocket. Configure this URL in the Shiprocket dashboard under Settings → Channels → Webhooks. No admin auth — Shiprocket calls this directly.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "awb": { "type": "string" },
+                  "shipment_id": { "type": "string" },
+                  "current_status": { "type": "string", "example": "DELIVERED" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Webhook processed" },
+          "400": { "description": "Missing awb or shipment_id" },
+          "404": { "description": "No matching order for this AWB" }
+        }
+      }
+    },
+    "/api/shipping/webhook/delhivery": {
+      "post": {
+        "summary": "Delhivery Status Webhook",
+        "description": "Receives automatic shipment status push notifications from Delhivery. Configure this URL in Delhivery's dashboard under Integration → Webhooks. No admin auth — Delhivery calls this directly.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "Shipment": {
+                    "type": "object",
+                    "properties": {
+                      "AWB": { "type": "string" },
+                      "Status": {
+                        "type": "object",
+                        "properties": {
+                          "Status": { "type": "string", "example": "Delivered" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Webhook processed" },
+          "400": { "description": "Missing AWB" },
+          "404": { "description": "No matching order for this AWB" }
+        }
+      }
+    },
+    "/api/shipping/ndr/{orderId}": {
+      "get": {
+        "summary": "Get NDR Status",
+        "description": "Fetches non-delivery report (NDR) details for the order's shipment from the active provider. Only supported by providers implementing getNdrShipments (currently Delhivery).",
+        "security": [{ "AdminAuth": [] }],
+        "parameters": [
+          { "name": "orderId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "NDR details returned" },
+          "400": { "description": "No AWB assigned yet, or NDR lookup not supported by the active provider" },
+          "502": { "description": "NDR lookup failed" }
+        }
+      }
+    },
+    "/api/shipping/ndr/{orderId}/action": {
+      "post": {
+        "summary": "Submit NDR Action",
+        "description": "Submits a re-attempt/deferred/RTO instruction for an NDR'd shipment. Only supported by providers implementing actionNdr (currently Delhivery, best-effort — Delhivery's NDR-action API isn't fully documented publicly).",
+        "security": [{ "AdminAuth": [] }],
+        "parameters": [
+          { "name": "orderId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["action"],
+                "properties": {
+                  "action": { "type": "string", "enum": ["RE-ATTEMPT", "DEFERRED", "RTO"] },
+                  "comment": { "type": "string" },
+                  "reattemptDate": { "type": "string", "format": "date" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "NDR action submitted" },
+          "400": { "description": "action missing, no AWB, or not supported by the active provider" },
+          "502": { "description": "NDR action failed" }
+        }
+      }
+    },
+    "/api/shipping/ewaybill/{orderId}": {
+      "post": {
+        "summary": "Attach E-Way Bill",
+        "description": "Registers a GST e-way bill number (and invoice number) against an order's shipment — required for shipments with invoice value > ₹50k. The e-way bill itself must already be generated on the government e-way bill portal; this only attaches its number to the shipment. Only supported by providers implementing updateEwaybill (currently Delhivery).",
+        "security": [{ "AdminAuth": [] }],
+        "parameters": [
+          { "name": "orderId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["ewbn"],
+                "properties": {
+                  "ewbn": { "type": "string", "description": "E-way bill number generated on the government portal" },
+                  "dcn": { "type": "string", "description": "Invoice number. Defaults to the order ID if omitted." }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "E-way bill attached" },
+          "400": { "description": "ewbn missing, no AWB, or not supported by the active provider" },
+          "502": { "description": "E-way bill update failed (e.g. package not found, invalid e-way bill pattern)" }
+        }
+      }
+    },
+    "/api/shipping/config": {
+      "patch": {
+        "summary": "Update Shipping Config",
+        "description": "Updates global shipping settings (courier priority, COD pincode mode, estimated delivery days, etc.).",
+        "security": [{ "AdminAuth": [] }],
+        "responses": {
+          "200": { "description": "Shipping config updated" }
+        }
+      }
+    },
+    "/api/shipping/zones": {
+      "post": {
+        "summary": "Create Shipping Zone",
+        "description": "Adds a new shipping rate zone (countries, weight slabs, free-shipping threshold).",
+        "security": [{ "AdminAuth": [] }],
+        "responses": {
+          "200": { "description": "Zone created" }
+        }
+      }
+    },
+    "/api/shipping/zones/{id}": {
+      "patch": {
+        "summary": "Update Shipping Zone",
+        "security": [{ "AdminAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Zone updated" },
+          "404": { "description": "Zone not found" }
+        }
+      },
+      "delete": {
+        "summary": "Delete Shipping Zone",
+        "security": [{ "AdminAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Zone deleted" }
+        }
+      }
+    },
+    "/api/shipping/cod-check/{pincode}": {
+      "get": {
+        "summary": "Static COD Serviceability Check",
+        "description": "Checks a pincode against the store's static COD allow/blocklist (no external API call). See /api/shipping/serviceability for a live carrier lookup.",
+        "parameters": [
+          { "name": "pincode", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Serviceability result returned" }
+        }
+      }
+    },
+    "/api/shipping/serviceability/{pincode}": {
+      "get": {
+        "summary": "Live Pincode Serviceability Check",
+        "description": "Checks pincode serviceability via the active shipping provider's live API (e.g. Delhivery's pin-codes API), falling back to the static allow/blocklist when no provider is configured or the check fails.",
+        "parameters": [
+          { "name": "pincode", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Serviceability result returned, with source: 'provider' or 'static'" }
+        }
+      }
+    },
+    "/api/shipping/rate": {
+      "post": {
+        "summary": "Calculate Shipping Rate",
+        "description": "Calculates a shipping rate. If destPincode is supplied and the active provider supports a live quote (e.g. Delhivery's invoice/charges API), that is tried first; otherwise falls back to the store's static zone/weight-slab table.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "countryCode": { "type": "string", "example": "IN" },
+                  "weightKg": { "type": "number", "example": 0.4 },
+                  "orderValue": { "type": "number", "example": 1200 },
+                  "destPincode": { "type": "string", "example": "400001" },
+                  "paymentMode": { "type": "string", "enum": ["cod", "prepaid"] }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Rate returned, with source: 'provider' or 'static'" }
+        }
+      }
+    },
+    "/api/integrations": {
+      "get": {
+        "summary": "List Integrations",
+        "description": "Lists all configured integrations (payments, shipping, marketing, etc.) grouped by category, with secret fields masked.",
+        "security": [{ "AdminAuth": [] }],
+        "responses": {
+          "200": { "description": "Integrations returned" }
+        }
+      }
+    },
+    "/api/integrations/{key}": {
+      "get": {
+        "summary": "Get Integration",
+        "description": "Fetches a single integration's config (e.g. 'delhivery', 'shiprocket'), with secret fields masked.",
+        "security": [{ "AdminAuth": [] }],
+        "parameters": [
+          { "name": "key", "in": "path", "required": true, "schema": { "type": "string" }, "example": "delhivery" }
+        ],
+        "responses": {
+          "200": { "description": "Integration returned" },
+          "404": { "description": "Integration not found" }
+        }
+      },
+      "patch": {
+        "summary": "Update Integration",
+        "description": "Updates an integration's config. Masked placeholder values ('••••••••') are skipped so an already-set secret isn't accidentally overwritten. For Delhivery this is where apiToken, clientName, pickupLocation, pickupAddress, pickupPincode, pickupState, pickupPhone and sellerGstTin are set.",
+        "security": [{ "AdminAuth": [] }],
+        "parameters": [
+          { "name": "key", "in": "path", "required": true, "schema": { "type": "string" }, "example": "delhivery" }
+        ],
+        "responses": {
+          "200": { "description": "Integration updated" },
+          "404": { "description": "Integration not found" }
+        }
+      }
+    },
+    "/api/integrations/{key}/toggle": {
+      "patch": {
+        "summary": "Toggle Integration Enabled",
+        "description": "Flips an integration's enabled/disabled state and updates its connection status.",
+        "security": [{ "AdminAuth": [] }],
+        "parameters": [
+          { "name": "key", "in": "path", "required": true, "schema": { "type": "string" }, "example": "delhivery" }
+        ],
+        "responses": {
+          "200": { "description": "Toggle applied" },
+          "404": { "description": "Integration not found" }
+        }
+      }
+    },
+    "/api/integrations/{key}/test": {
+      "post": {
+        "summary": "Test Integration Credentials",
+        "description": "Validates that an integration's required credential fields are present (e.g. Delhivery requires apiToken). Does not perform a live API handshake.",
+        "security": [{ "AdminAuth": [] }],
+        "parameters": [
+          { "name": "key", "in": "path", "required": true, "schema": { "type": "string" }, "example": "delhivery" }
+        ],
+        "responses": {
+          "200": { "description": "Credentials look valid" },
+          "400": { "description": "Missing required credential fields" },
+          "404": { "description": "Integration not found" }
+        }
+      }
     }
   }
 }

@@ -168,7 +168,7 @@ class ShiprocketProvider {
   async createReversePickup(order, requestId) {
     const token = await getToken(this.cfg);
     const addr = order.shippingAddress;
-    return apiRequest('POST', '/orders/create/return', {
+    const res = await apiRequest('POST', '/orders/create/return', {
       order_id: `${order.id}-RET-${requestId}`,
       order_date: new Date().toISOString().slice(0, 10),
       channel_id: this.cfg.channelId || '',
@@ -199,6 +199,16 @@ class ShiprocketProvider {
         units: i.qty, selling_price: i.unitPrice,
       })),
     }, token);
+
+    // Normalize to the same shape as createShipment so callers don't need
+    // to special-case each provider's raw response fields.
+    return {
+      provider: 'shiprocket',
+      orderId: res.order_id,
+      shipmentId: String(res.shipment_id || ''),
+      awb: res.awb_code || null,
+      raw: res,
+    };
   }
 }
 

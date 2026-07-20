@@ -2,14 +2,21 @@
 const { ShiprocketProvider } = require('./shiprocket');
 const { DelhiveryProvider } = require('./delhivery');
 
-function getActiveShippingProvider(DB) {
+// requireAutoPush controls whether cfg.autoPush is checked. It defaults to
+// true because that's the correct gate for fully automatic dispatch (new
+// order placed, stock restocked). Admin-triggered actions (manual push,
+// cancel, track, label, NDR, reverse pickup, etc.) pass requireAutoPush:false
+// since an integration only needs to be `enabled` to be usable on demand —
+// `autoPush` is specifically "should new orders dispatch here automatically",
+// not "is this integration usable at all".
+function getActiveShippingProvider(DB, { requireAutoPush = true } = {}) {
   const integrations = DB.settings.integrations;
   const store = DB.settings.store;
   const priority = DB.settings.shipping.courierPriority || ['shiprocket', 'delhivery', 'manualShip'];
 
   for (const name of priority) {
     const cfg = integrations[name];
-    if (!cfg || cfg.category !== 'shipping' || !cfg.enabled || !cfg.autoPush) continue;
+    if (!cfg || cfg.category !== 'shipping' || !cfg.enabled || (requireAutoPush && !cfg.autoPush)) continue;
     if (name === 'shiprocket' && cfg.email && cfg.password) {
       return new ShiprocketProvider(cfg, store);
     }
@@ -18,7 +25,7 @@ function getActiveShippingProvider(DB) {
     }
     // Future providers: add here same pattern
   }
-  return null; // no auto-push provider configured
+  return null; // no matching provider configured
 }
 
 // Check if ALL items in the order have physical stock available (warehouse check)
@@ -46,8 +53,8 @@ function checkFulfillableStock(order, DB) {
 // Main entry point called after order is confirmed
 // Handles: stock check → push to provider → update order tracking fields
 // Returns: { pushed: bool, reason: string, result?: object }
-async function autoDispatchOrder(order, DB) {
-  const provider = getActiveShippingProvider(DB);
+async function autoDispatchOrder(order, DB, { requireAutoPush = true } = {}) {
+  const provider = getActiveShippingProvider(DB, { requireAutoPush });
   if (!provider) {
     return { pushed: false, reason: 'no_provider', message: 'No auto-push shipping provider configured' };
   }
