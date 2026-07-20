@@ -1559,6 +1559,7 @@ function applyQuery(rows, q, searchable) {
   let out = [...rows];
   if (q.search) { const s=q.search.toLowerCase(); out = out.filter(r => searchable.some(f => String(getPath(r,f)||'').toLowerCase().includes(s))); }
   if (q.filterField && q.filterValue !== undefined) out = out.filter(r => String(getPath(r,q.filterField)) === String(q.filterValue));
+  if (q.status) out = out.filter(r => String(r.status) === String(q.status));
   if (q.min !== undefined) out = out.filter(r => getPath(r,q.sortBy||'')>=+q.min);
   if (q.max !== undefined) out = out.filter(r => getPath(r,q.sortBy||'')<=+q.max);
   if (q.sortBy) { const dir=q.sortDir==='desc'?-1:1; out.sort((a,b)=>{const av=getPath(a,q.sortBy),bv=getPath(b,q.sortBy);return (av>bv?1:av<bv?-1:0)*dir;}); }
