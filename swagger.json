@@ -296,6 +296,145 @@
         }
       }
     },
+    "/api/fabrics": {
+      "get": {
+        "summary": "List Fabrics",
+        "description": "Retrieves all active product fabrics with their product counts.",
+        "responses": {
+          "200": { "description": "Success" }
+        }
+      }
+    },
+    "/api/admin/fabrics": {
+      "get": {
+        "summary": "List All Fabrics (admin)",
+        "description": "Retrieves every fabric, including inactive ones, with product counts.",
+        "security": [{ "AdminAuth": [] }],
+        "responses": {
+          "200": { "description": "Success" }
+        }
+      },
+      "post": {
+        "summary": "Create Fabric",
+        "description": "Creates a new product fabric.",
+        "security": [{ "AdminAuth": [] }],
+        "responses": {
+          "200": { "description": "Fabric created successfully" },
+          "409": { "description": "Fabric name or slug already exists" }
+        }
+      }
+    },
+    "/api/admin/fabrics/{name}": {
+      "patch": {
+        "summary": "Update Fabric",
+        "description": "Updates a fabric's fields. Renaming cascades to every product currently using the old name.",
+        "security": [{ "AdminAuth": [] }],
+        "parameters": [
+          { "name": "name", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Updated successfully" },
+          "404": { "description": "Fabric not found" },
+          "409": { "description": "Fabric name already in use" }
+        }
+      },
+      "delete": {
+        "summary": "Delete Fabric",
+        "description": "Removes a fabric. Blocked if any product still references it.",
+        "security": [{ "AdminAuth": [] }],
+        "parameters": [
+          { "name": "name", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Deleted successfully" },
+          "404": { "description": "Fabric not found" },
+          "409": { "description": "Fabric is in use by products" }
+        }
+      }
+    },
+    "/api/admin/fabrics/{name}/toggle": {
+      "patch": {
+        "summary": "Toggle Fabric Active State",
+        "description": "Activates or deactivates a fabric, controlling its visibility on the public fabrics list.",
+        "security": [{ "AdminAuth": [] }],
+        "parameters": [
+          { "name": "name", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Toggled successfully" },
+          "404": { "description": "Fabric not found" }
+        }
+      }
+    },
+    "/api/occasions": {
+      "get": {
+        "summary": "List Occasions",
+        "description": "Retrieves all active \"Shop by Occasion\" curated links (label + linked category).",
+        "responses": {
+          "200": { "description": "Success" }
+        }
+      }
+    },
+    "/api/admin/occasions": {
+      "get": {
+        "summary": "List All Occasions (admin)",
+        "description": "Retrieves every occasion, including inactive ones.",
+        "security": [{ "AdminAuth": [] }],
+        "responses": {
+          "200": { "description": "Success" }
+        }
+      },
+      "post": {
+        "summary": "Create Occasion",
+        "description": "Creates a new curated occasion link (label + category).",
+        "security": [{ "AdminAuth": [] }],
+        "responses": {
+          "200": { "description": "Occasion created successfully" },
+          "400": { "description": "Unknown category" }
+        }
+      }
+    },
+    "/api/admin/occasions/{id}": {
+      "patch": {
+        "summary": "Update Occasion",
+        "description": "Updates an occasion's label, linked category, sort order, or active state.",
+        "security": [{ "AdminAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Updated successfully" },
+          "404": { "description": "Occasion not found" },
+          "400": { "description": "Unknown category" }
+        }
+      },
+      "delete": {
+        "summary": "Delete Occasion",
+        "description": "Removes a curated occasion link.",
+        "security": [{ "AdminAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Deleted successfully" },
+          "404": { "description": "Occasion not found" }
+        }
+      }
+    },
+    "/api/admin/occasions/{id}/toggle": {
+      "patch": {
+        "summary": "Toggle Occasion Active State",
+        "description": "Activates or deactivates an occasion, controlling its visibility on the storefront.",
+        "security": [{ "AdminAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Toggled successfully" },
+          "404": { "description": "Occasion not found" }
+        }
+      }
+    },
     "/api/coupons/validate": {
       "post": {
         "summary": "Validate Coupon Code",

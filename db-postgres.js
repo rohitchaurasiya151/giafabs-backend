@@ -17,7 +17,7 @@ async function initDB(DB) {
         transactions, orders,
         audit_log, tickets, coupons,
         customer_auth, employees, users,
-        product_images, product_variants, products, categories, countries, configs
+        product_images, product_variants, products, categories, fabrics, occasions, countries, configs
       CASCADE;
     `);
   }
@@ -30,6 +30,25 @@ async function initDB(DB) {
       name       VARCHAR(100)  PRIMARY KEY,
       slug       VARCHAR(100)  UNIQUE NOT NULL,
       gst_rate   SMALLINT      NOT NULL DEFAULT 12,
+      active     BOOLEAN       NOT NULL DEFAULT TRUE,
+      sort_order INTEGER       NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+    );
+
+    -- ── FABRICS (admin-managed, products reference by name) ─────────────────
+    CREATE TABLE IF NOT EXISTS fabrics (
+      name       VARCHAR(100)  PRIMARY KEY,
+      slug       VARCHAR(100)  UNIQUE NOT NULL,
+      active     BOOLEAN       NOT NULL DEFAULT TRUE,
+      sort_order INTEGER       NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+    );
+
+    -- ── OCCASIONS (curated "Shop by Occasion" links, admin-managed) ─────────
+    CREATE TABLE IF NOT EXISTS occasions (
+      id         VARCHAR(50)   PRIMARY KEY,
+      label      VARCHAR(100)  NOT NULL,
+      category   VARCHAR(100)  NOT NULL REFERENCES categories(name) ON UPDATE CASCADE,
       active     BOOLEAN       NOT NULL DEFAULT TRUE,
       sort_order INTEGER       NOT NULL DEFAULT 0,
       created_at TIMESTAMPTZ   NOT NULL DEFAULT NOW()
@@ -299,6 +318,15 @@ async function initDB(DB) {
     CREATE INDEX IF NOT EXISTS idx_categories_active     ON categories(active);
     CREATE INDEX IF NOT EXISTS idx_categories_sort_order ON categories(sort_order);
 
+    -- fabrics: storefront listing, admin ordering
+    CREATE INDEX IF NOT EXISTS idx_fabrics_active     ON fabrics(active);
+    CREATE INDEX IF NOT EXISTS idx_fabrics_sort_order ON fabrics(sort_order);
+
+    -- occasions: storefront listing, admin ordering
+    CREATE INDEX IF NOT EXISTS idx_occasions_active     ON occasions(active);
+    CREATE INDEX IF NOT EXISTS idx_occasions_sort_order ON occasions(sort_order);
+    CREATE INDEX IF NOT EXISTS idx_occasions_category   ON occasions(category);
+
     -- products: query by category, active, stock, price, full-text search
     CREATE INDEX IF NOT EXISTS idx_products_category    ON products(category);
     CREATE INDEX IF NOT EXISTS idx_products_active      ON products(active);
@@ -400,6 +428,12 @@ async function initDB(DB) {
 
   // categories (before products — products reference category names)
   await loadOrSeed('categories', DB.categories, categoryToRow, rowToCategory, 'name');
+
+  // fabrics (before products — products reference fabric names)
+  await loadOrSeed('fabrics', DB.fabrics, fabricToRow, rowToFabric, 'name');
+
+  // occasions (after categories — occasions.category is an FK to categories.name)
+  await loadOrSeed('occasions', DB.occasions, occasionToRow, rowToOccasion, 'id');
 
   // products
   await loadOrSeed('products', DB.products, productToRow, rowToProduct);
@@ -515,6 +549,38 @@ function rowToCategory(r) {
   return {
     name: r.name, slug: r.slug,
     gstRate: r.gst_rate, active: r.active,
+    sortOrder: r.sort_order, createdAt: r.created_at,
+  };
+}
+
+function fabricToRow(f) {
+  return {
+    name: f.name, slug: f.slug,
+    active: f.active !== false,
+    sort_order: f.sortOrder || 0,
+  };
+}
+
+function rowToFabric(r) {
+  return {
+    name: r.name, slug: r.slug,
+    active: r.active,
+    sortOrder: r.sort_order, createdAt: r.created_at,
+  };
+}
+
+function occasionToRow(o) {
+  return {
+    id: o.id, label: o.label, category: o.category,
+    active: o.active !== false,
+    sort_order: o.sortOrder || 0,
+  };
+}
+
+function rowToOccasion(r) {
+  return {
+    id: r.id, label: r.label, category: r.category,
+    active: r.active,
     sortOrder: r.sort_order, createdAt: r.created_at,
   };
 }
@@ -978,6 +1044,8 @@ function syncDB(key, DB) {
   syncQueue = syncQueue.then(async () => {
     try {
       if      (key === 'categories')              await saveCollection('categories',                  DB.categories,            categoryToRow,    'name');
+      else if (key === 'fabrics')                await saveCollection('fabrics',                     DB.fabrics,               fabricToRow,      'name');
+      else if (key === 'occasions')              await saveCollection('occasions',                   DB.occasions,             occasionToRow,    'id');
       else if (key === 'products')               await saveCollection('products',                    DB.products,              productToRow);
       else if (key === 'productVariants')        await saveCollection('product_variants',             DB.productVariants,       productVariantToRow);
       else if (key === 'orders')                 await saveCollection('orders',                      DB.orders,                orderToRow);

@@ -348,8 +348,9 @@ function attachVariants(p) {
 
 app.get('/api/products', (req, res) => {
   let prods = DB.products.filter(p => p.active);
-  const { category, minPrice, maxPrice, brand, search, sortBy, featured } = req.query;
+  const { category, fabric, minPrice, maxPrice, brand, search, sortBy, featured } = req.query;
   if (category && category !== 'all') prods = prods.filter(p => p.category === category);
+  if (fabric && fabric !== 'all') prods = prods.filter(p => p.fabric === fabric);
   if (brand) prods = prods.filter(p => p.brand === brand);
   if (featured === 'true') prods = prods.filter(p => p.featured);
   if (minPrice) prods = prods.filter(p => p.price >= +minPrice);
@@ -374,6 +375,9 @@ app.post('/api/products', requireAdmin('products.*'), (req, res) => {
   if (req.body.category && !DB.categories.find(c => c.name === req.body.category)) {
     return res.status(400).json({ error: `Unknown category "${req.body.category}". Create it first via /api/admin/categories.` });
   }
+  if (req.body.fabric && !DB.fabrics.find(f => f.name === req.body.fabric)) {
+    return res.status(400).json({ error: `Unknown fabric "${req.body.fabric}". Create it first via /api/admin/fabrics.` });
+  }
   const { variants: incomingVariants, ...body } = req.body;
   const p = { id: genId('PRD', DB.products.length + 1001, 3), createdAt: new Date().toISOString(), active: true, rating: 0, reviews: 0, tags: [], images: [], sizes: [], ...body };
   DB.products.push(p);
@@ -390,6 +394,9 @@ app.patch('/api/products/:id', requireAdmin('products.*'), async (req, res) => {
   if (!p) return res.status(404).json({ error: 'Not found' });
   if (req.body.category && !DB.categories.find(c => c.name === req.body.category)) {
     return res.status(400).json({ error: `Unknown category "${req.body.category}". Create it first via /api/admin/categories.` });
+  }
+  if (req.body.fabric && !DB.fabrics.find(f => f.name === req.body.fabric)) {
+    return res.status(400).json({ error: `Unknown fabric "${req.body.fabric}". Create it first via /api/admin/fabrics.` });
   }
   const { variants: incomingVariants, ...body } = req.body;
   Object.assign(p, body, { updatedAt: new Date().toISOString() });
@@ -475,9 +482,14 @@ app.patch('/api/admin/categories/:name', requireAdmin('products.*'), (req, res) 
     if (DB.categories.find(x => x !== c && x.name.toLowerCase() === newName.toLowerCase())) {
       return res.status(409).json({ error: 'Category name already in use' });
     }
-    // cascade rename so existing products keep pointing at a valid category
+    // cascade rename so existing products/occasions keep pointing at a valid category
     DB.products.filter(p => p.category === c.name).forEach(p => { p.category = newName; });
     syncDB('products', DB);
+    const affectedOccasions = DB.occasions.filter(o => o.category === c.name);
+    if (affectedOccasions.length) {
+      affectedOccasions.forEach(o => { o.category = newName; });
+      syncDB('occasions', DB);
+    }
     c.name = newName;
   }
   if (slug) c.slug = slug;
@@ -494,6 +506,9 @@ app.delete('/api/admin/categories/:name', requireAdmin('products.*'), (req, res)
   if (DB.products.some(p => p.category === req.params.name)) {
     return res.status(409).json({ error: 'Category is in use by products; reassign or remove those products first' });
   }
+  if (DB.occasions.some(o => o.category === req.params.name)) {
+    return res.status(409).json({ error: 'Category is in use by a "Shop by Occasion" link; remove or reassign it first' });
+  }
   const [removed] = DB.categories.splice(i, 1);
   syncDB('categories', DB);
   audit(req.user.email, 'CATEGORY_DELETE', removed.name);
@@ -506,6 +521,142 @@ app.patch('/api/admin/categories/:name/toggle', requireAdmin('products.*'), (req
   syncDB('categories', DB);
   audit(req.user.email, 'CATEGORY_TOGGLE', c.name, { active: c.active });
   res.json({ success: true, active: c.active });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════
+// FABRICS (admin-managed; products reference by name)
+// ════════════════════════════════════════════════════════════════════════════════
+function fabricWithCount(f) {
+  return { ...f, productCount: DB.products.filter(p => p.fabric === f.name).length };
+}
+app.get('/api/fabrics', (_, res) => {
+  const fabs = DB.fabrics.filter(f => f.active).sort((a, b) => a.sortOrder - b.sortOrder);
+  res.json({ fabrics: fabs.map(fabricWithCount) });
+});
+app.get('/api/admin/fabrics', requireAdmin('products.*'), (_, res) => {
+  const fabs = [...DB.fabrics].sort((a, b) => a.sortOrder - b.sortOrder);
+  res.json({ fabrics: fabs.map(fabricWithCount) });
+});
+app.post('/api/admin/fabrics', requireAdmin('products.*'), (req, res) => {
+  const name = (req.body.name || '').trim();
+  if (!validate.nonEmpty(name)) return res.status(400).json({ error: 'Fabric name required' });
+  if (DB.fabrics.find(f => f.name.toLowerCase() === name.toLowerCase())) {
+    return res.status(409).json({ error: 'Fabric already exists' });
+  }
+  const slug = (req.body.slug || name).trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  if (!slug) return res.status(400).json({ error: 'Could not derive a valid slug from name' });
+  if (DB.fabrics.find(f => f.slug === slug)) return res.status(409).json({ error: 'Fabric slug already exists' });
+  const f = {
+    name, slug,
+    active: true,
+    sortOrder: Number.isFinite(+req.body.sortOrder) ? +req.body.sortOrder : DB.fabrics.length + 1,
+  };
+  DB.fabrics.push(f);
+  syncDB('fabrics', DB);
+  audit(req.user.email, 'FABRIC_CREATE', f.name);
+  res.json({ success: true, fabric: fabricWithCount(f) });
+});
+app.patch('/api/admin/fabrics/:name', requireAdmin('products.*'), (req, res) => {
+  const f = DB.fabrics.find(x => x.name === req.params.name);
+  if (!f) return res.status(404).json({ error: 'Not found' });
+  const { name: newName, slug, sortOrder, active } = req.body;
+  if (newName && newName.trim() && newName !== f.name) {
+    if (DB.fabrics.find(x => x !== f && x.name.toLowerCase() === newName.toLowerCase())) {
+      return res.status(409).json({ error: 'Fabric name already in use' });
+    }
+    // cascade rename so existing products keep pointing at a valid fabric
+    DB.products.filter(p => p.fabric === f.name).forEach(p => { p.fabric = newName; });
+    syncDB('products', DB);
+    f.name = newName;
+  }
+  if (slug) f.slug = slug;
+  if (Number.isFinite(+sortOrder)) f.sortOrder = +sortOrder;
+  if (typeof active === 'boolean') f.active = active;
+  syncDB('fabrics', DB);
+  audit(req.user.email, 'FABRIC_UPDATE', f.name, req.body);
+  res.json({ success: true, fabric: fabricWithCount(f) });
+});
+app.delete('/api/admin/fabrics/:name', requireAdmin('products.*'), (req, res) => {
+  const i = DB.fabrics.findIndex(x => x.name === req.params.name);
+  if (i === -1) return res.status(404).json({ error: 'Not found' });
+  if (DB.products.some(p => p.fabric === req.params.name)) {
+    return res.status(409).json({ error: 'Fabric is in use by products; reassign or remove those products first' });
+  }
+  const [removed] = DB.fabrics.splice(i, 1);
+  syncDB('fabrics', DB);
+  audit(req.user.email, 'FABRIC_DELETE', removed.name);
+  res.json({ success: true });
+});
+app.patch('/api/admin/fabrics/:name/toggle', requireAdmin('products.*'), (req, res) => {
+  const f = DB.fabrics.find(x => x.name === req.params.name);
+  if (!f) return res.status(404).json({ error: 'Not found' });
+  f.active = !f.active;
+  syncDB('fabrics', DB);
+  audit(req.user.email, 'FABRIC_TOGGLE', f.name, { active: f.active });
+  res.json({ success: true, active: f.active });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════
+// OCCASIONS ("Shop by Occasion" curated links; admin-managed)
+// ════════════════════════════════════════════════════════════════════════════════
+app.get('/api/occasions', (_, res) => {
+  const occs = DB.occasions.filter(o => o.active).sort((a, b) => a.sortOrder - b.sortOrder);
+  res.json({ occasions: occs });
+});
+app.get('/api/admin/occasions', requireAdmin('products.*'), (_, res) => {
+  const occs = [...DB.occasions].sort((a, b) => a.sortOrder - b.sortOrder);
+  res.json({ occasions: occs });
+});
+app.post('/api/admin/occasions', requireAdmin('products.*'), (req, res) => {
+  const label = (req.body.label || '').trim();
+  const category = (req.body.category || '').trim();
+  if (!validate.nonEmpty(label)) return res.status(400).json({ error: 'Occasion label required' });
+  if (!category || !DB.categories.find(c => c.name === category)) {
+    return res.status(400).json({ error: `Unknown category "${category}". Create it first via /api/admin/categories.` });
+  }
+  const o = {
+    id: genId('OCC', DB.occasions.length + 1, 3),
+    label, category,
+    active: true,
+    sortOrder: Number.isFinite(+req.body.sortOrder) ? +req.body.sortOrder : DB.occasions.length + 1,
+  };
+  DB.occasions.push(o);
+  syncDB('occasions', DB);
+  audit(req.user.email, 'OCCASION_CREATE', o.id);
+  res.json({ success: true, occasion: o });
+});
+app.patch('/api/admin/occasions/:id', requireAdmin('products.*'), (req, res) => {
+  const o = DB.occasions.find(x => x.id === req.params.id);
+  if (!o) return res.status(404).json({ error: 'Not found' });
+  const { label, category, sortOrder, active } = req.body;
+  if (category && category !== o.category) {
+    if (!DB.categories.find(c => c.name === category)) {
+      return res.status(400).json({ error: `Unknown category "${category}". Create it first via /api/admin/categories.` });
+    }
+    o.category = category;
+  }
+  if (label && label.trim()) o.label = label.trim();
+  if (Number.isFinite(+sortOrder)) o.sortOrder = +sortOrder;
+  if (typeof active === 'boolean') o.active = active;
+  syncDB('occasions', DB);
+  audit(req.user.email, 'OCCASION_UPDATE', o.id, req.body);
+  res.json({ success: true, occasion: o });
+});
+app.delete('/api/admin/occasions/:id', requireAdmin('products.*'), (req, res) => {
+  const i = DB.occasions.findIndex(x => x.id === req.params.id);
+  if (i === -1) return res.status(404).json({ error: 'Not found' });
+  const [removed] = DB.occasions.splice(i, 1);
+  syncDB('occasions', DB);
+  audit(req.user.email, 'OCCASION_DELETE', removed.id);
+  res.json({ success: true });
+});
+app.patch('/api/admin/occasions/:id/toggle', requireAdmin('products.*'), (req, res) => {
+  const o = DB.occasions.find(x => x.id === req.params.id);
+  if (!o) return res.status(404).json({ error: 'Not found' });
+  o.active = !o.active;
+  syncDB('occasions', DB);
+  audit(req.user.email, 'OCCASION_TOGGLE', o.id, { active: o.active });
+  res.json({ success: true, active: o.active });
 });
 
 // ════════════════════════════════════════════════════════════════════════════════

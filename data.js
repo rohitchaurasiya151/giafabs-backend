@@ -29,6 +29,28 @@ const DB = {
     {name:'Accessories',  slug:'accessories',  gstRate:12, active:true, sortOrder:6},
   ],
 
+  // ─────────── PRODUCT FABRICS (dynamic — admin-managed) ───────────
+  fabrics: [
+    {name:'Pure Silk',        slug:'pure-silk',        active:true, sortOrder:1},
+    {name:'Banarasi Cotton',  slug:'banarasi-cotton',  active:true, sortOrder:2},
+    {name:'Cotton Denim',     slug:'cotton-denim',     active:true, sortOrder:3},
+    {name:'Chanderi',         slug:'chanderi',         active:true, sortOrder:4},
+    {name:'Rayon',            slug:'rayon',            active:true, sortOrder:5},
+    {name:'Kanjivaram Silk',  slug:'kanjivaram-silk',  active:true, sortOrder:6},
+    {name:'Polyester Blend',  slug:'polyester-blend',  active:true, sortOrder:7},
+    {name:'Cotton',           slug:'cotton',           active:true, sortOrder:8},
+    {name:'Pashmina',         slug:'pashmina',         active:true, sortOrder:9},
+  ],
+
+  // ─────────── SHOP-BY-OCCASION CURATED LINKS (dynamic — admin-managed) ───────────
+  occasions: [
+    {id:'OCC001', label:'Wedding',     category:'Lehengas',      active:true, sortOrder:1},
+    {id:'OCC002', label:'Festive',     category:'Sarees',        active:true, sortOrder:2},
+    {id:'OCC003', label:'Office Wear', category:'Salwar Suits',  active:true, sortOrder:3},
+    {id:'OCC004', label:'Casual Days', category:'Kurtas',        active:true, sortOrder:4},
+    {id:'OCC005', label:'Party Wear',  category:'Accessories',   active:true, sortOrder:5},
+  ],
+
   orders: [
     {id:'GIAFABS0001',createdAt:'2026-07-10T10:00:00Z',updatedAt:'2026-07-12T15:30:00Z',type:'b2c',customer:{name:'Priya Sharma',email:'priya.sharma@example.com',mobile:'9876543210'},shippingAddress:{firstName:'Priya',lastName:'Sharma',line1:'123 Fashion Street',line2:'Apt 4B',city:'Mumbai',state:'Maharashtra',pincode:'400001',country:'India',countryCode:'IN'},items:[{productId:'PRD001',size:'M',name:'Emerald Silk Kurta with Embroidery',sku:'WKTA001',hsn:'61103090',gstRate:12,unitPrice:2499,qty:1,lineSubtotal:2499,lineGst:300}],payment:{method:'cod',status:'pending',transactionId:null,gatewayOrderId:null},pricing:{subtotal:2499,gst:300,discount:0,coupon:null,shipping:49,codCharge:50,total:2898,currency:'INR',currencySymbol:'₹',fxRate:1,totalInCurrency:2898},tax:{gstin:'07AAJPT5055K1Z0',state:'Maharashtra',label:'CGST + SGST (intra-state)'},status:'delivered',isInternational:false,tracking:{partner:'Delhivery',awb:'DLV1234567890',providerOrderId:'SR123456',history:[{label:'Order Placed',done:true,time:'2026-07-10T10:00:00Z'},{label:'Order Confirmed (COD)',done:true,time:'2026-07-10T10:15:00Z'},{label:'Shipment Created',done:true,time:'2026-07-10T11:00:00Z'},{label:'Order Delivered',done:true,time:'2026-07-12T15:30:00Z'}]},shippingStatus:'delivered'}
   ],
