@@ -226,6 +226,76 @@
         }
       }
     },
+    "/api/categories": {
+      "get": {
+        "summary": "List Categories",
+        "description": "Retrieves all active product categories with their product counts.",
+        "responses": {
+          "200": { "description": "Success" }
+        }
+      }
+    },
+    "/api/admin/categories": {
+      "get": {
+        "summary": "List All Categories (admin)",
+        "description": "Retrieves every category, including inactive ones, with product counts.",
+        "security": [{ "AdminAuth": [] }],
+        "responses": {
+          "200": { "description": "Success" }
+        }
+      },
+      "post": {
+        "summary": "Create Category",
+        "description": "Creates a new product category.",
+        "security": [{ "AdminAuth": [] }],
+        "responses": {
+          "200": { "description": "Category created successfully" },
+          "409": { "description": "Category name or slug already exists" }
+        }
+      }
+    },
+    "/api/admin/categories/{name}": {
+      "patch": {
+        "summary": "Update Category",
+        "description": "Updates a category's fields. Renaming cascades to every product currently using the old name.",
+        "security": [{ "AdminAuth": [] }],
+        "parameters": [
+          { "name": "name", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Updated successfully" },
+          "404": { "description": "Category not found" },
+          "409": { "description": "Category name already in use" }
+        }
+      },
+      "delete": {
+        "summary": "Delete Category",
+        "description": "Removes a category. Blocked if any product still references it.",
+        "security": [{ "AdminAuth": [] }],
+        "parameters": [
+          { "name": "name", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Deleted successfully" },
+          "404": { "description": "Category not found" },
+          "409": { "description": "Category is in use by products" }
+        }
+      }
+    },
+    "/api/admin/categories/{name}/toggle": {
+      "patch": {
+        "summary": "Toggle Category Active State",
+        "description": "Activates or deactivates a category, controlling its visibility on the public categories list.",
+        "security": [{ "AdminAuth": [] }],
+        "parameters": [
+          { "name": "name", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Toggled successfully" },
+          "404": { "description": "Category not found" }
+        }
+      }
+    },
     "/api/coupons/validate": {
       "post": {
         "summary": "Validate Coupon Code",

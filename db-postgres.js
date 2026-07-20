@@ -17,7 +17,7 @@ async function initDB(DB) {
         transactions, orders,
         audit_log, tickets, coupons,
         customer_auth, employees, users,
-        product_images, product_variants, products, countries, configs
+        product_images, product_variants, products, categories, countries, configs
       CASCADE;
     `);
   }
@@ -25,6 +25,16 @@ async function initDB(DB) {
   // ── 1. CREATE TABLES ───────────────────────────────────────────────────────
 
   await pool.query(`
+    -- ── CATEGORIES (admin-managed, products reference by name) ──────────────
+    CREATE TABLE IF NOT EXISTS categories (
+      name       VARCHAR(100)  PRIMARY KEY,
+      slug       VARCHAR(100)  UNIQUE NOT NULL,
+      gst_rate   SMALLINT      NOT NULL DEFAULT 12,
+      active     BOOLEAN       NOT NULL DEFAULT TRUE,
+      sort_order INTEGER       NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+    );
+
     -- ── PRODUCTS ──────────────────────────────────────────────────────────
     CREATE TABLE IF NOT EXISTS products (
       id           VARCHAR(50)    PRIMARY KEY,
@@ -285,6 +295,10 @@ async function initDB(DB) {
 
   // ── 2. CREATE INDEXES ──────────────────────────────────────────────────────
   await pool.query(`
+    -- categories: storefront listing, admin ordering
+    CREATE INDEX IF NOT EXISTS idx_categories_active     ON categories(active);
+    CREATE INDEX IF NOT EXISTS idx_categories_sort_order ON categories(sort_order);
+
     -- products: query by category, active, stock, price, full-text search
     CREATE INDEX IF NOT EXISTS idx_products_category    ON products(category);
     CREATE INDEX IF NOT EXISTS idx_products_active      ON products(active);
@@ -383,6 +397,9 @@ async function initDB(DB) {
       for (const r of res.rows) memoryArray.push(fromRow(r));
     }
   }
+
+  // categories (before products — products reference category names)
+  await loadOrSeed('categories', DB.categories, categoryToRow, rowToCategory, 'name');
 
   // products
   await loadOrSeed('products', DB.products, productToRow, rowToProduct);
@@ -484,6 +501,23 @@ async function loadOrSeedSessions(tableName, sessionObj, userIdField) {
 }
 
 // ── ROW MAPPERS: in-memory object → DB columns ───────────────────────────────
+
+function categoryToRow(c) {
+  return {
+    name: c.name, slug: c.slug,
+    gst_rate: c.gstRate ?? 12,
+    active: c.active !== false,
+    sort_order: c.sortOrder || 0,
+  };
+}
+
+function rowToCategory(r) {
+  return {
+    name: r.name, slug: r.slug,
+    gstRate: r.gst_rate, active: r.active,
+    sortOrder: r.sort_order, createdAt: r.created_at,
+  };
+}
 
 function productToRow(p) {
   return {
@@ -943,7 +977,8 @@ let syncQueue = Promise.resolve();
 function syncDB(key, DB) {
   syncQueue = syncQueue.then(async () => {
     try {
-      if      (key === 'products')               await saveCollection('products',                    DB.products,              productToRow);
+      if      (key === 'categories')              await saveCollection('categories',                  DB.categories,            categoryToRow,    'name');
+      else if (key === 'products')               await saveCollection('products',                    DB.products,              productToRow);
       else if (key === 'productVariants')        await saveCollection('product_variants',             DB.productVariants,       productVariantToRow);
       else if (key === 'orders')                 await saveCollection('orders',                      DB.orders,                orderToRow);
       else if (key === 'transactions')           await saveCollection('transactions',                DB.transactions,          txnToRow);

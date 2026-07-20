@@ -371,6 +371,9 @@ app.get('/api/products/:id', (req, res, next) => {
 });
 app.post('/api/products', requireAdmin('products.*'), (req, res) => {
   if (!validate.nonEmpty(req.body.name)) return res.status(400).json({ error: 'Product name required' });
+  if (req.body.category && !DB.categories.find(c => c.name === req.body.category)) {
+    return res.status(400).json({ error: `Unknown category "${req.body.category}". Create it first via /api/admin/categories.` });
+  }
   const { variants: incomingVariants, ...body } = req.body;
   const p = { id: genId('PRD', DB.products.length + 1001, 3), createdAt: new Date().toISOString(), active: true, rating: 0, reviews: 0, tags: [], images: [], sizes: [], ...body };
   DB.products.push(p);
@@ -385,6 +388,9 @@ app.post('/api/products', requireAdmin('products.*'), (req, res) => {
 app.patch('/api/products/:id', requireAdmin('products.*'), async (req, res) => {
   const p = DB.products.find(x => x.id === req.params.id);
   if (!p) return res.status(404).json({ error: 'Not found' });
+  if (req.body.category && !DB.categories.find(c => c.name === req.body.category)) {
+    return res.status(400).json({ error: `Unknown category "${req.body.category}". Create it first via /api/admin/categories.` });
+  }
   const { variants: incomingVariants, ...body } = req.body;
   Object.assign(p, body, { updatedAt: new Date().toISOString() });
   const productsSynced = syncDB('products', DB);
@@ -425,6 +431,81 @@ app.patch('/api/products/:id/toggle', requireAdmin('products.*'), (req, res) => 
   syncDB('products', DB);
   audit(req.user.email, 'PRODUCT_TOGGLE', p.id, { active: p.active });
   res.json({ success: true, active: p.active });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════
+// CATEGORIES (admin-managed; products reference by name)
+// ════════════════════════════════════════════════════════════════════════════════
+function categoryWithCount(c) {
+  return { ...c, productCount: DB.products.filter(p => p.category === c.name).length };
+}
+app.get('/api/categories', (_, res) => {
+  const cats = DB.categories.filter(c => c.active).sort((a, b) => a.sortOrder - b.sortOrder);
+  res.json({ categories: cats.map(categoryWithCount) });
+});
+app.get('/api/admin/categories', requireAdmin('products.*'), (_, res) => {
+  const cats = [...DB.categories].sort((a, b) => a.sortOrder - b.sortOrder);
+  res.json({ categories: cats.map(categoryWithCount) });
+});
+app.post('/api/admin/categories', requireAdmin('products.*'), (req, res) => {
+  const name = (req.body.name || '').trim();
+  if (!validate.nonEmpty(name)) return res.status(400).json({ error: 'Category name required' });
+  if (DB.categories.find(c => c.name.toLowerCase() === name.toLowerCase())) {
+    return res.status(409).json({ error: 'Category already exists' });
+  }
+  const slug = (req.body.slug || name).trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  if (!slug) return res.status(400).json({ error: 'Could not derive a valid slug from name' });
+  if (DB.categories.find(c => c.slug === slug)) return res.status(409).json({ error: 'Category slug already exists' });
+  const c = {
+    name, slug,
+    gstRate: Number.isFinite(+req.body.gstRate) ? +req.body.gstRate : 12,
+    active: true,
+    sortOrder: Number.isFinite(+req.body.sortOrder) ? +req.body.sortOrder : DB.categories.length + 1,
+  };
+  DB.categories.push(c);
+  syncDB('categories', DB);
+  audit(req.user.email, 'CATEGORY_CREATE', c.name);
+  res.json({ success: true, category: categoryWithCount(c) });
+});
+app.patch('/api/admin/categories/:name', requireAdmin('products.*'), (req, res) => {
+  const c = DB.categories.find(x => x.name === req.params.name);
+  if (!c) return res.status(404).json({ error: 'Not found' });
+  const { name: newName, slug, gstRate, sortOrder, active } = req.body;
+  if (newName && newName.trim() && newName !== c.name) {
+    if (DB.categories.find(x => x !== c && x.name.toLowerCase() === newName.toLowerCase())) {
+      return res.status(409).json({ error: 'Category name already in use' });
+    }
+    // cascade rename so existing products keep pointing at a valid category
+    DB.products.filter(p => p.category === c.name).forEach(p => { p.category = newName; });
+    syncDB('products', DB);
+    c.name = newName;
+  }
+  if (slug) c.slug = slug;
+  if (Number.isFinite(+gstRate)) c.gstRate = +gstRate;
+  if (Number.isFinite(+sortOrder)) c.sortOrder = +sortOrder;
+  if (typeof active === 'boolean') c.active = active;
+  syncDB('categories', DB);
+  audit(req.user.email, 'CATEGORY_UPDATE', c.name, req.body);
+  res.json({ success: true, category: categoryWithCount(c) });
+});
+app.delete('/api/admin/categories/:name', requireAdmin('products.*'), (req, res) => {
+  const i = DB.categories.findIndex(x => x.name === req.params.name);
+  if (i === -1) return res.status(404).json({ error: 'Not found' });
+  if (DB.products.some(p => p.category === req.params.name)) {
+    return res.status(409).json({ error: 'Category is in use by products; reassign or remove those products first' });
+  }
+  const [removed] = DB.categories.splice(i, 1);
+  syncDB('categories', DB);
+  audit(req.user.email, 'CATEGORY_DELETE', removed.name);
+  res.json({ success: true });
+});
+app.patch('/api/admin/categories/:name/toggle', requireAdmin('products.*'), (req, res) => {
+  const c = DB.categories.find(x => x.name === req.params.name);
+  if (!c) return res.status(404).json({ error: 'Not found' });
+  c.active = !c.active;
+  syncDB('categories', DB);
+  audit(req.user.email, 'CATEGORY_TOGGLE', c.name, { active: c.active });
+  res.json({ success: true, active: c.active });
 });
 
 // ════════════════════════════════════════════════════════════════════════════════
