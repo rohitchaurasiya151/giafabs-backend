@@ -103,4 +103,43 @@ async function autoDispatchOrder(order, DB, { requireAutoPush = true } = {}) {
   }
 }
 
-module.exports = { autoDispatchOrder, checkFulfillableStock, getActiveShippingProvider };
+// Normalizes a provider's raw trackShipment() response into one consistent shape
+// so the admin UI doesn't need provider-specific rendering logic:
+// { status, statusLocation, statusDateTime, scans: [{ time, location, description, instructions }] }
+// Returns null if the raw response doesn't match the expected shape (e.g. no data for that AWB yet).
+function normalizeTracking(providerName, raw) {
+  if (providerName === 'delhivery') {
+    const shipment = raw?.ShipmentData?.[0]?.Shipment;
+    if (!shipment) return null;
+    return {
+      status: shipment.Status?.Status || null,
+      statusLocation: shipment.Status?.StatusLocation || null,
+      statusDateTime: shipment.Status?.StatusDateTime || null,
+      scans: (shipment.Scans || []).map(s => ({
+        time: s.ScanDetail?.ScanDateTime || null,
+        location: s.ScanDetail?.ScannedLocation || null,
+        description: s.ScanDetail?.Scan || null,
+        instructions: s.ScanDetail?.Instructions || null,
+      })),
+    };
+  }
+  if (providerName === 'shiprocket') {
+    const data = raw?.tracking_data;
+    if (!data) return null;
+    const latest = data.shipment_track?.[0];
+    return {
+      status: latest?.current_status || null,
+      statusLocation: latest?.destination || null,
+      statusDateTime: latest?.updated_time_stamp || null,
+      scans: (data.shipment_track_activities || []).map(a => ({
+        time: a.date || null,
+        location: a.location || null,
+        description: a.activity || null,
+        instructions: a['sr-status-label'] || a.status || null,
+      })),
+    };
+  }
+  return null;
+}
+
+module.exports = { autoDispatchOrder, checkFulfillableStock, getActiveShippingProvider, normalizeTracking };

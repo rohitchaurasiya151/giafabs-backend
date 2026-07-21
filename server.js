@@ -129,7 +129,7 @@ app.post('/api/customer/register', (req, res) => {
   if (DB.customerAuth.find(c => c.email.toLowerCase() === email.toLowerCase()))
     return res.status(409).json({ error: 'Email already registered' });
 
-  const cust = { id: genId('CU', DB.customerAuth.length + 1001), name: name.trim(), email: email.toLowerCase(), mobile: mobile || '', passwordHash: hashPw(password), createdAt: new Date().toISOString(), wallet: 0, addresses: [] };
+  const cust = { id: genId('CU', DB.customerAuth.length + 1001), name: name.trim(), email: email.toLowerCase(), mobile: mobile || '', passwordHash: hashPw(password), createdAt: new Date().toISOString(), wallet: 0 };
   DB.customerAuth.push(cust);
   const token = genToken();
   DB.customerSessions[token] = { customerId: cust.id, expires: Date.now() + SESSION_TTL };
@@ -154,7 +154,8 @@ app.post('/api/customer/login', (req, res) => {
 
 app.get('/api/customer/me', requireCustomer, (req, res) => {
   const c = req.customer;
-  res.json({ id: c.id, name: c.name, email: c.email, mobile: c.mobile, wallet: c.wallet, addresses: c.addresses });
+  const addresses = DB.customerAddresses.filter(a => a.customerId === c.id);
+  res.json({ id: c.id, name: c.name, email: c.email, mobile: c.mobile, wallet: c.wallet, addresses });
 });
 
 app.post('/api/customer/logout', (req, res) => {
@@ -164,6 +165,101 @@ app.post('/api/customer/logout', (req, res) => {
     syncDB('customerSessions', DB);
   }
   res.json({ success: true });
+});
+
+// Customer address book (multiple saved addresses + one default)
+app.get('/api/customer/addresses', requireCustomer, (req, res) => {
+  const addresses = DB.customerAddresses.filter(a => a.customerId === req.customer.id);
+  res.json(addresses);
+});
+
+app.post('/api/customer/addresses', requireCustomer, async (req, res) => {
+  const customerId = req.customer.id;
+  const { firstName, lastName, phone, line1, line2, city, state, pincode, country, countryCode, label, isDefault } = req.body;
+
+  if (!validate.nonEmpty(line1)) return res.status(400).json({ error: 'Address line 1 is required' });
+  if (!validate.nonEmpty(city)) return res.status(400).json({ error: 'City is required' });
+  if (!validate.nonEmpty(state)) return res.status(400).json({ error: 'State is required' });
+  if (!validate.pincode(pincode)) return res.status(400).json({ error: 'Valid pincode is required' });
+  if (phone && !validate.mobile(phone)) return res.status(400).json({ error: 'Invalid phone number' });
+
+  const existing = DB.customerAddresses.filter(a => a.customerId === customerId);
+  const makeDefault = existing.length === 0 || isDefault === true;
+  if (makeDefault) existing.forEach(a => { a.isDefault = false; });
+
+  const address = {
+    id: genId('ADDR', DB.customerAddresses.length + 1001),
+    customerId,
+    label: label || '',
+    firstName: firstName || '',
+    lastName: lastName || '',
+    phone: phone || '',
+    line1, line2: line2 || '', city, state, pincode,
+    country: country || 'India',
+    countryCode: countryCode || 'IN',
+    isDefault: makeDefault,
+    createdAt: new Date().toISOString(),
+  };
+  DB.customerAddresses.push(address);
+  await syncDB('customerAddresses', DB);
+  res.status(201).json(address);
+});
+
+app.put('/api/customer/addresses/:id', requireCustomer, async (req, res) => {
+  const customerId = req.customer.id;
+  const address = DB.customerAddresses.find(a => a.id === req.params.id && a.customerId === customerId);
+  if (!address) return res.status(404).json({ error: 'Address not found' });
+
+  const { firstName, lastName, phone, line1, line2, city, state, pincode, country, countryCode, label, isDefault } = req.body;
+  if (line1 !== undefined && !validate.nonEmpty(line1)) return res.status(400).json({ error: 'Address line 1 is required' });
+  if (city !== undefined && !validate.nonEmpty(city)) return res.status(400).json({ error: 'City is required' });
+  if (state !== undefined && !validate.nonEmpty(state)) return res.status(400).json({ error: 'State is required' });
+  if (pincode !== undefined && !validate.pincode(pincode)) return res.status(400).json({ error: 'Valid pincode is required' });
+  if (phone && !validate.mobile(phone)) return res.status(400).json({ error: 'Invalid phone number' });
+
+  if (firstName !== undefined) address.firstName = firstName;
+  if (lastName !== undefined) address.lastName = lastName;
+  if (phone !== undefined) address.phone = phone;
+  if (line1 !== undefined) address.line1 = line1;
+  if (line2 !== undefined) address.line2 = line2;
+  if (city !== undefined) address.city = city;
+  if (state !== undefined) address.state = state;
+  if (pincode !== undefined) address.pincode = pincode;
+  if (country !== undefined) address.country = country;
+  if (countryCode !== undefined) address.countryCode = countryCode;
+  if (label !== undefined) address.label = label;
+
+  if (isDefault === true) {
+    DB.customerAddresses.filter(a => a.customerId === customerId).forEach(a => { a.isDefault = (a.id === address.id); });
+  }
+
+  await syncDB('customerAddresses', DB);
+  res.json(address);
+});
+
+app.put('/api/customer/addresses/:id/default', requireCustomer, async (req, res) => {
+  const customerId = req.customer.id;
+  const address = DB.customerAddresses.find(a => a.id === req.params.id && a.customerId === customerId);
+  if (!address) return res.status(404).json({ error: 'Address not found' });
+
+  DB.customerAddresses.filter(a => a.customerId === customerId).forEach(a => { a.isDefault = (a.id === address.id); });
+  await syncDB('customerAddresses', DB);
+  res.json({ success: true, addresses: DB.customerAddresses.filter(a => a.customerId === customerId) });
+});
+
+app.delete('/api/customer/addresses/:id', requireCustomer, async (req, res) => {
+  const customerId = req.customer.id;
+  const address = DB.customerAddresses.find(a => a.id === req.params.id && a.customerId === customerId);
+  if (!address) return res.status(404).json({ error: 'Address not found' });
+
+  DB.customerAddresses = DB.customerAddresses.filter(a => a.id !== address.id);
+  if (address.isDefault) {
+    const remaining = DB.customerAddresses.filter(a => a.customerId === customerId);
+    if (remaining.length > 0) remaining[0].isDefault = true;
+  }
+
+  await syncDB('customerAddresses', DB);
+  res.json({ success: true, addresses: DB.customerAddresses.filter(a => a.customerId === customerId) });
 });
 
 // Customer order history
@@ -957,7 +1053,7 @@ app.patch('/api/orders/:id/status', requireAdmin('orders.update'), (req, res) =>
 // ════════════════════════════════════════════════════════════════════════════════
 // SHIPPING MANAGEMENT — admin APIs + Shiprocket webhook
 // ════════════════════════════════════════════════════════════════════════════════
-const { getActiveShippingProvider, checkFulfillableStock } = require('./src/shipping');
+const { getActiveShippingProvider, checkFulfillableStock, normalizeTracking } = require('./src/shipping');
 
 // Manual push: admin triggers dispatch for a specific order (e.g. after restocking)
 app.post('/api/shipping/push/:orderId', requireAdmin('orders.update'), async (req, res) => {
@@ -1061,10 +1157,23 @@ app.post('/api/shipping/cancel/:orderId', requireAdmin('orders.update'), async (
   res.json({ success: true, order });
 });
 
-// Live tracking pull from Shiprocket by AWB
-app.get('/api/shipping/track/:orderId', requireAdmin('orders.read'), async (req, res) => {
+// Live tracking pull from Shiprocket/Delhivery by AWB — admin, or the
+// customer who owns the order (same dual-auth pattern as GET /api/orders/:id).
+app.get('/api/shipping/track/:orderId', async (req, res) => {
   const order = DB.orders.find(o => o.id === req.params.orderId);
   if (!order) return res.status(404).json({ error: 'Order not found' });
+
+  const adminToken = req.headers['x-admin-token'];
+  const adminSess = adminToken && DB.adminSessions[adminToken];
+  const adminUser = adminSess && adminSess.expires >= Date.now() && DB.users.find(u => u.id === adminSess.userId);
+  const isAdmin = adminUser && adminUser.active && hasPermission(adminUser, 'orders.read');
+
+  const custToken = req.headers['x-customer-token'];
+  const custSess = custToken && DB.customerSessions[custToken];
+  const cust = custSess && custSess.expires >= Date.now() && DB.customerAuth.find(c => c.id === custSess.customerId);
+  const isOwner = cust && order.customer.email === cust.email;
+
+  if (!isAdmin && !isOwner) return res.status(401).json({ error: 'Unauthorized to view this order' });
   if (!order.tracking.awb) return res.status(400).json({ error: 'No AWB assigned yet' });
 
   const provider = getActiveShippingProvider(DB, { requireAutoPush: false });
@@ -1072,7 +1181,8 @@ app.get('/api/shipping/track/:orderId', requireAdmin('orders.read'), async (req,
 
   try {
     const tracking = await provider.trackShipment(order.tracking.awb);
-    res.json({ success: true, awb: order.tracking.awb, tracking });
+    const normalized = normalizeTracking((order.tracking.partner || '').toLowerCase(), tracking);
+    res.json({ success: true, awb: order.tracking.awb, tracking, normalized });
   } catch (e) {
     res.status(502).json({ error: 'Tracking fetch failed', detail: e?.body || e });
   }

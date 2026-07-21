@@ -32,9 +32,12 @@ const schema = z.object({
   PGHOST: z.string().default('localhost'),
   PGPORT: z.coerce.number().int().positive().default(5432),
   PGUSER: z.string().default('postgres'),
-  PGPASSWORD: secretField('postgres', {
-    message: 'PGPASSWORD is required in staging/production (or set DATABASE_URL instead)',
-  }),
+  // PGPASSWORD's staging/production requirement is enforced conditionally
+  // below (only when DATABASE_URL isn't set) — hosting platforms like
+  // Render/Railway inject a single DATABASE_URL for managed Postgres rather
+  // than discrete PG* vars, so this field can't unconditionally require a
+  // real value the way the other secretField()s do.
+  PGPASSWORD: z.string().default(requireRealSecrets ? '' : 'postgres'),
   PGDATABASE: z.string().default('giafabs_db'),
 
   JWT_SECRET: secretField('dev-insecure-secret-change-me', {
@@ -73,8 +76,18 @@ const schema = z.object({
   ENABLE_NEW_UI: boolFromString(false),
 });
 
+const schemaWithPgCheck = schema.superRefine((data, ctx) => {
+  if (requireRealSecrets && !data.DATABASE_URL && !data.PGPASSWORD) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['PGPASSWORD'],
+      message: 'PGPASSWORD is required in staging/production when DATABASE_URL is not set',
+    });
+  }
+});
+
 function validateEnv() {
-  const result = schema.safeParse(process.env);
+  const result = schemaWithPgCheck.safeParse(process.env);
 
   if (!result.success) {
     const lines = result.error.issues.map((issue) => `  - ${issue.path.join('.')}: ${issue.message}`);

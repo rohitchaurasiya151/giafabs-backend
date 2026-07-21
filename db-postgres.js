@@ -16,7 +16,7 @@ async function initDB(DB) {
         customer_sessions, admin_sessions,
         transactions, orders,
         audit_log, tickets, coupons,
-        customer_auth, employees, users,
+        customer_addresses, customer_auth, employees, users,
         product_images, product_variants, products, categories, fabrics, occasions, countries, configs
       CASCADE;
     `);
@@ -112,6 +112,26 @@ async function initDB(DB) {
       password_hash TEXT          NOT NULL,
       gstin         VARCHAR(20),
       active        BOOLEAN       NOT NULL DEFAULT TRUE,
+      created_at    TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+      updated_at    TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+    );
+
+    -- ── CUSTOMER ADDRESSES (address book, one row per saved address) ────────
+    CREATE TABLE IF NOT EXISTS customer_addresses (
+      id            VARCHAR(50)   PRIMARY KEY,
+      customer_id   VARCHAR(50)   NOT NULL REFERENCES customer_auth(id) ON DELETE CASCADE,
+      label         VARCHAR(50),
+      first_name    VARCHAR(100),
+      last_name     VARCHAR(100),
+      phone         VARCHAR(20),
+      line1         VARCHAR(255)  NOT NULL,
+      line2         VARCHAR(255),
+      city          VARCHAR(100)  NOT NULL,
+      state         VARCHAR(100)  NOT NULL,
+      pincode       VARCHAR(20)   NOT NULL,
+      country       VARCHAR(100)  NOT NULL DEFAULT 'India',
+      country_code  CHAR(2)       NOT NULL DEFAULT 'IN',
+      is_default    BOOLEAN       NOT NULL DEFAULT FALSE,
       created_at    TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
       updated_at    TIMESTAMPTZ   NOT NULL DEFAULT NOW()
     );
@@ -357,6 +377,9 @@ async function initDB(DB) {
     CREATE INDEX IF NOT EXISTS idx_customer_phone  ON customer_auth(phone);
     CREATE INDEX IF NOT EXISTS idx_customer_active ON customer_auth(active);
 
+    -- customer_addresses: lookup all addresses for a customer
+    CREATE INDEX IF NOT EXISTS idx_customer_addresses_customer ON customer_addresses(customer_id);
+
     -- customer_sessions: expire cleanup
     CREATE INDEX IF NOT EXISTS idx_csess_customer_id ON customer_sessions(customer_id);
     CREATE INDEX IF NOT EXISTS idx_csess_expires     ON customer_sessions(expires_at);
@@ -470,6 +493,10 @@ async function initDB(DB) {
 
   // customer_auth (must exist before orders/transactions reference it)
   await loadOrSeed('customer_auth', DB.customerAuth, customerToRow, rowToCustomer);
+
+  // customer_addresses (after customer_auth — FK dependency)
+  DB.customerAddresses = DB.customerAddresses || [];
+  await loadOrSeed('customer_addresses', DB.customerAddresses, addressToRow, rowToAddress);
 
   // cart_items (after products and customer_auth)
   await loadOrSeed('cart_items', DB.cartItems || [], cartToRow, rowToCart);
@@ -662,6 +689,35 @@ function rowToCustomer(r) {
     mobile: r.phone, passwordHash: r.password_hash,
     gstin: r.gstin, active: r.active,
     createdAt: r.created_at,
+  };
+}
+
+function addressToRow(a) {
+  return {
+    id: a.id,
+    customer_id: a.customerId,
+    label: a.label || null,
+    first_name: a.firstName || null,
+    last_name: a.lastName || null,
+    phone: a.phone || null,
+    line1: a.line1,
+    line2: a.line2 || null,
+    city: a.city,
+    state: a.state,
+    pincode: a.pincode,
+    country: a.country || 'India',
+    country_code: a.countryCode || 'IN',
+    is_default: a.isDefault === true,
+  };
+}
+
+function rowToAddress(r) {
+  return {
+    id: r.id, customerId: r.customer_id, label: r.label,
+    firstName: r.first_name, lastName: r.last_name, phone: r.phone,
+    line1: r.line1, line2: r.line2, city: r.city, state: r.state,
+    pincode: r.pincode, country: r.country, countryCode: r.country_code,
+    isDefault: r.is_default, createdAt: r.created_at,
   };
 }
 
@@ -1051,6 +1107,7 @@ function syncDB(key, DB) {
       else if (key === 'orders')                 await saveCollection('orders',                      DB.orders,                orderToRow);
       else if (key === 'transactions')           await saveCollection('transactions',                DB.transactions,          txnToRow);
       else if (key === 'customerAuth')           await saveCollection('customer_auth',               DB.customerAuth,          customerToRow);
+      else if (key === 'customerAddresses')      await saveCollection('customer_addresses',          DB.customerAddresses,     addressToRow);
       else if (key === 'cartItems')              await saveCollection('cart_items',                  DB.cartItems,             cartToRow,        ['customer_id', 'product_id', 'size']);
       else if (key === 'wishlistItems')          await saveCollection('wishlist_items',              DB.wishlistItems,         wishlistToRow,    ['customer_id', 'product_id']);
       else if (key === 'customerSessions')       await saveSessions('customer_sessions',             DB.customerSessions,      'customer_id');

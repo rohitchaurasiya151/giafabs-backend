@@ -59,8 +59,9 @@ const DB = {
   ],
   transactions: [],
   customerAuth: [
-    {id:'CU1001',name:'Priya Sharma',email:'priya.sharma@example.com',mobile:'9876543210',passwordHash:hashPw('test123'),createdAt:'2026-07-10T10:00:00Z',wallet:0,addresses:[]}
+    {id:'CU1001',name:'Priya Sharma',email:'priya.sharma@example.com',mobile:'9876543210',passwordHash:hashPw('test123'),createdAt:'2026-07-10T10:00:00Z',wallet:0}
   ],
+  customerAddresses: [],
   cartItems: [],
   wishlistItems: [],
   productVariants: [],
