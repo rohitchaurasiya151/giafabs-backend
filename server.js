@@ -1053,13 +1053,16 @@ app.patch('/api/orders/:id/status', requireAdmin('orders.update'), (req, res) =>
 // ════════════════════════════════════════════════════════════════════════════════
 // SHIPPING MANAGEMENT — admin APIs + Shiprocket webhook
 // ════════════════════════════════════════════════════════════════════════════════
-const { getActiveShippingProvider, checkFulfillableStock, normalizeTracking } = require('./src/shipping');
+const { getActiveShippingProvider, checkFulfillableStock, normalizeTracking, isOrderShippable } = require('./src/shipping');
 
 // Manual push: admin triggers dispatch for a specific order (e.g. after restocking)
 app.post('/api/shipping/push/:orderId', requireAdmin('orders.update'), async (req, res) => {
   const order = DB.orders.find(o => o.id === req.params.orderId);
   if (!order) return res.status(404).json({ error: 'Order not found' });
   if (order.shippingStatus === 'dispatched') return res.status(409).json({ error: 'Already dispatched', order });
+
+  const eligibility = isOrderShippable(order);
+  if (!eligibility.ok) return res.status(409).json({ error: eligibility.reason, order });
 
   const shipping = await autoDispatchOrder(order, DB, { requireAutoPush: false });
   audit(req.user.email, 'SHIPPING_MANUAL_PUSH', order.id, { result: shipping.reason });
@@ -1084,6 +1087,8 @@ app.post('/api/shipping/push/bulk', requireAdmin('orders.update'), async (req, r
     const eligible = [];
     for (const order of orders) {
       if (order.shippingStatus === 'dispatched') { results.failed.push({ orderId: order.id, reason: 'already_dispatched' }); continue; }
+      const eligibility = isOrderShippable(order);
+      if (!eligibility.ok) { results.failed.push({ orderId: order.id, reason: eligibility.reason }); continue; }
       const stockCheck = checkFulfillableStock(order, DB);
       if (!stockCheck.ok) {
         order.shippingStatus = 'awaiting_stock';
@@ -1124,6 +1129,8 @@ app.post('/api/shipping/push/bulk', requireAdmin('orders.update'), async (req, r
     }
   } else {
     for (const order of orders) {
+      const eligibility = isOrderShippable(order);
+      if (!eligibility.ok) { results.failed.push({ orderId: order.id, reason: eligibility.reason }); continue; }
       const r = await autoDispatchOrder(order, DB, { requireAutoPush: false });
       if (r.pushed) results.pushed.push({ orderId: order.id, awb: r.result?.awb });
       else if (r.reason === 'out_of_stock') results.outOfStock.push({ orderId: order.id, items: r.outOfStock });

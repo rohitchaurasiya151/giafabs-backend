@@ -50,6 +50,20 @@ function checkFulfillableStock(order, DB) {
   return { ok: outOfStock.length === 0, outOfStock };
 }
 
+// Whether an order is eligible to be pushed to a shipping provider:
+// COD orders are shippable regardless of payment.status (cash is collected on
+// delivery, so it never reaches 'completed' beforehand); prepaid orders
+// (razorpay/upi/etc.) must have payment.status === 'completed' first.
+// Cancelled/delivered orders are never (re-)shippable.
+// Returns { ok: boolean, reason?: string }
+function isOrderShippable(order) {
+  if (order.status === 'cancelled') return { ok: false, reason: 'Order is cancelled' };
+  if (order.status === 'delivered') return { ok: false, reason: 'Order is already delivered' };
+  const paid = order.payment?.method === 'cod' || order.payment?.status === 'completed';
+  if (!paid) return { ok: false, reason: 'Payment not completed' };
+  return { ok: true };
+}
+
 // Main entry point called after order is confirmed
 // Handles: stock check → push to provider → update order tracking fields
 // Returns: { pushed: bool, reason: string, result?: object }
@@ -142,4 +156,4 @@ function normalizeTracking(providerName, raw) {
   return null;
 }
 
-module.exports = { autoDispatchOrder, checkFulfillableStock, getActiveShippingProvider, normalizeTracking };
+module.exports = { autoDispatchOrder, checkFulfillableStock, getActiveShippingProvider, normalizeTracking, isOrderShippable };
