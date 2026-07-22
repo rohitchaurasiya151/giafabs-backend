@@ -84,7 +84,10 @@ function buildShiprocketPayload(order, storeCfg) {
     billing_state: addr.state || '',
     billing_country: addr.country || 'India',
     billing_email: order.customer.email,
-    billing_phone: order.customer.mobile || '',
+    // Fall back to the shipping address's phone — order.customer.mobile can
+    // be empty for accounts predating the mobile-persistence fix, even
+    // though the delivery contact number was captured fine at checkout.
+    billing_phone: order.customer.mobile || addr.phone || '',
 
     shipping_is_billing: true,
 

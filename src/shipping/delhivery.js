@@ -98,7 +98,11 @@ function buildShipmentEntry(order, cfg, waybill, { paymentMode, codAmount, order
     city: addr.city || '',
     state: addr.state || '',
     country: 'India',
-    phone: order.customer.mobile || '',
+    // Fall back to the shipping address's phone — order.customer.mobile can
+    // be empty for accounts predating the mobile-persistence fix (see
+    // DELHIVERY_DEBUG_NOTES.md), even though the delivery contact number
+    // was captured fine at checkout.
+    phone: order.customer.mobile || addr.phone || '',
     pin: addr.pincode || addr.zip || '',
 
     order: orderId,
