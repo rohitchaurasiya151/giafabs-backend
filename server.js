@@ -158,6 +158,20 @@ app.get('/api/customer/me', requireCustomer, (req, res) => {
   res.json({ id: c.id, name: c.name, email: c.email, mobile: c.mobile, wallet: c.wallet, addresses });
 });
 
+// Update the logged-in customer's own name/mobile (email is immutable — it's the login identity)
+app.put('/api/customer/profile', requireCustomer, async (req, res) => {
+  const { name, mobile } = req.body || {};
+  if (name !== undefined && !validate.nonEmpty(name)) return res.status(400).json({ error: 'Name is required' });
+  if (mobile && !validate.mobile(mobile)) return res.status(400).json({ error: 'Invalid mobile number' });
+
+  const cust = req.customer;
+  if (name !== undefined) cust.name = name.trim();
+  if (mobile !== undefined) cust.mobile = mobile;
+
+  await syncDB('customerAuth', DB);
+  res.json({ id: cust.id, name: cust.name, email: cust.email, mobile: cust.mobile, wallet: cust.wallet });
+});
+
 app.post('/api/customer/logout', (req, res) => {
   const token = req.headers['x-customer-token'];
   if (token) {
@@ -940,6 +954,38 @@ function persistOrder(customer, shippingAddress, payment, calc, type) {
   return order;
 }
 
+// Resolves a saved address-book entry into the shape persistOrder() expects,
+// scoped to the requesting customer (never trust an address ID belonging to
+// someone else). Written with both naming conventions used across the
+// codebase (name/address vs firstName+lastName/line1) since existing
+// frontend render sites read different keys — see ORDER_CREATION_REFACTOR_PLAN.md.
+function resolveShippingAddress(customer, shippingAddressId) {
+  if (!shippingAddressId) return { error: 'shippingAddressId is required', status: 400 };
+  const addr = DB.customerAddresses.find(a => a.id === shippingAddressId && a.customerId === customer.id);
+  if (!addr) return { error: 'Address not found', status: 404 };
+
+  const fullName = [addr.firstName, addr.lastName].filter(Boolean).join(' ');
+  const fullLine = [addr.line1, addr.line2].filter(Boolean).join(', ');
+  return {
+    shippingAddress: {
+      name: fullName, firstName: addr.firstName, lastName: addr.lastName,
+      phone: addr.phone,
+      address: fullLine, line1: addr.line1, line2: addr.line2,
+      city: addr.city, state: addr.state, pincode: addr.pincode,
+      country: addr.country, countryCode: addr.countryCode,
+    },
+  };
+}
+
+// Resolves the customer's server-side persisted cart into the items shape
+// computeOrder() expects — the authoritative source of "what's in this
+// customer's cart right now", instead of trusting a client-sent items array.
+function resolveCartItems(customer) {
+  return (DB.cartItems || [])
+    .filter(c => c.customerId === customer.id)
+    .map(c => ({ productId: c.productId, qty: c.qty, size: c.size }));
+}
+
 // Creates the order on the actual gateway's side (currently only Razorpay is
 // implemented) so the frontend gets back what it needs to open that
 // gateway's checkout widget. Returns null for any enabled-but-unimplemented
@@ -961,27 +1007,54 @@ async function createGatewayOrder(order) {
 }
 
 app.post('/api/orders', requireCustomer, async (req, res) => {
-  const calc = computeOrder({ customer: req.customer, ...req.body });
+  // Items: server-side cart is authoritative. TEMPORARY: fall back to a
+  // client-sent `items` array only for deploy-sequencing (old frontend still
+  // live against this backend) — remove once the new frontend is confirmed
+  // deployed. See ORDER_CREATION_REFACTOR_PLAN.md.
+  const items = Array.isArray(req.body.items) && req.body.items.length
+    ? req.body.items
+    : resolveCartItems(req.customer);
+
+  // Address: resolved from the customer's own address book by ID. TEMPORARY:
+  // fall back to a client-sent raw `shippingAddress` object, same
+  // deploy-sequencing reason as above.
+  let shippingAddress;
+  if (req.body.shippingAddressId) {
+    const resolved = resolveShippingAddress(req.customer, req.body.shippingAddressId);
+    if (resolved.error) return res.status(resolved.status).json({ error: resolved.error });
+    shippingAddress = resolved.shippingAddress;
+  } else if (req.body.shippingAddress) {
+    shippingAddress = req.body.shippingAddress;
+  } else {
+    return res.status(400).json({ error: 'shippingAddressId is required' });
+  }
+
+  const calc = computeOrder({ customer: req.customer, ...req.body, items, shippingAddress });
   if (calc.error) return res.status(calc.status || 400).json({ error: calc.error });
-  const order = persistOrder(req.customer, req.body.shippingAddress || {}, req.body.payment, calc, req.body.type || 'b2c');
+  const order = persistOrder(req.customer, shippingAddress, req.body.payment, calc, req.body.type || 'b2c');
   audit(req.customer.email, 'ORDER_PLACED', order.id, { total: order.pricing.total });
+
   syncDB('orders', DB);
   syncDB('transactions', DB);
   syncDB('products', DB).then(() => syncDB('productVariants', DB));
   syncDB('inventory.movements', DB);
   if (calc.appliedCoupon) syncDB('coupons', DB);
 
+  // Clear cart immediately for all payment methods — order already shows up in order history
+  DB.cartItems = (DB.cartItems || []).filter(item => item.customerId !== req.customer.id);
+  syncDB('cartItems', DB);
+
   let gateway = null;
   let shipping = null;
 
   if (order.payment.method === 'cod') {
-    // COD: order is already confirmed at placement — auto-dispatch immediately
     order.status = 'confirmed';
     order.updatedAt = new Date().toISOString();
     order.tracking.history.push({ label: 'Order Confirmed (COD)', done: true, time: order.updatedAt });
     shipping = await autoDispatchOrder(order, DB);
     syncDB('orders', DB);
   } else {
+    // Online payment: order is created but unpaid (awaiting_payment) — cart already cleared above
     try {
       gateway = await createGatewayOrder(order);
       if (gateway) {
@@ -1363,6 +1436,31 @@ app.post('/api/shipping/ewaybill/:orderId', requireAdmin('orders.update'), async
 // ════════════════════════════════════════════════════════════════════════════════
 // SECURE PAYMENT — generic gateway signature verification (multi-gateway-ready)
 // ════════════════════════════════════════════════════════════════════════════════
+// Re-creates a gateway order for an existing order stuck in awaiting_payment
+// (e.g. the customer closed the Razorpay modal without paying, or the first
+// gateway call failed) — resumes payment on the SAME order instead of the
+// customer having to place a duplicate one. Response shape matches POST
+// /api/orders's `gateway` field so the frontend can reuse openRazorpayCheckout.
+app.post('/api/orders/:id/payment/retry', requireCustomer, async (req, res) => {
+  const order = DB.orders.find(o => o.id === req.params.id && o.customer.email === req.customer.email);
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+  if (order.payment.method === 'cod') return res.status(400).json({ error: 'COD orders do not require online payment' });
+  if (order.payment.status === 'completed') return res.status(409).json({ error: 'This order is already paid' });
+  if (order.status === 'cancelled') return res.status(409).json({ error: 'This order has been cancelled' });
+
+  try {
+    const gateway = await createGatewayOrder(order);
+    if (!gateway) return res.status(400).json({ error: `Retry not supported for ${order.payment.method}` });
+    order.payment.gatewayOrderId = gateway.gatewayOrderId;
+    order.updatedAt = new Date().toISOString();
+    syncDB('orders', DB);
+    res.json({ success: true, gateway, order });
+  } catch (err) {
+    const detail = err?.error?.description || err?.message || 'Unknown error';
+    res.status(502).json({ error: `Payment gateway error: ${detail}` });
+  }
+});
+
 app.post('/api/orders/:id/payment/verify', requireCustomer, async (req, res) => {
   const order = DB.orders.find(o => o.id === req.params.id && o.customer.email === req.customer.email);
   if (!order) return res.status(404).json({ error: 'Order not found' });
@@ -1399,6 +1497,10 @@ app.post('/api/orders/:id/payment/verify', requireCustomer, async (req, res) => 
   if (!shipping.pushed) {
     audit(req.customer.email, 'SHIPPING_SKIPPED', order.id, { reason: shipping.reason, detail: shipping.message });
   }
+
+  // Cart was already cleared at order creation; this is a safety no-op for idempotency
+  DB.cartItems = (DB.cartItems || []).filter(item => item.customerId !== req.customer.id);
+  syncDB('cartItems', DB);
 
   syncDB('orders', DB);
   syncDB('transactions', DB);
