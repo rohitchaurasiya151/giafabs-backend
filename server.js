@@ -17,7 +17,33 @@ const Razorpay = require('razorpay');
 const { autoDispatchOrder } = require('./src/shipping');
 
 const app = express();
-app.use(cors());
+
+// CORS configuration to allow frontend apps
+app.use(cors({
+  origin: function(origin, callback) {
+    const allowedOrigins = [
+      'http://localhost:3000',
+      'http://localhost:3002',
+      'http://127.0.0.1:3000',
+      'http://127.0.0.1:3002',
+      process.env.CORS_ORIGIN || '*'
+    ];
+
+    if (!origin || allowedOrigins.includes(origin) || allowedOrigins.includes('*')) {
+      callback(null, true);
+    } else {
+      callback(null, true); // Allow all origins for now during development
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'x-customer-token', 'x-admin-token', 'Authorization'],
+  maxAge: 86400
+}));
+
+// Handle preflight requests
+app.options('*', cors());
+
 app.use(express.json({ limit: '1mb' }));
 
 // Swagger UI Documentation
