@@ -183,8 +183,30 @@ async function initDB(DB) {
       gateway_ref VARCHAR(255),
       status      VARCHAR(50)   NOT NULL DEFAULT 'pending',
       metadata    JSONB,
+      customer    VARCHAR(255),
+      email       VARCHAR(255),
+      state       VARCHAR(100),
+      country     VARCHAR(100),
+      product_name VARCHAR(255),
+      hsn         VARCHAR(20),
+      gst_rate    NUMERIC(5,2),
+      subtotal    NUMERIC(10,2),
+      gst_amount  NUMERIC(10,2),
+      method      VARCHAR(50),
+      tax_type    VARCHAR(50),
       created_at  TIMESTAMPTZ   NOT NULL DEFAULT NOW()
     );
+    ALTER TABLE transactions ADD COLUMN IF NOT EXISTS customer VARCHAR(255);
+    ALTER TABLE transactions ADD COLUMN IF NOT EXISTS email VARCHAR(255);
+    ALTER TABLE transactions ADD COLUMN IF NOT EXISTS state VARCHAR(100);
+    ALTER TABLE transactions ADD COLUMN IF NOT EXISTS country VARCHAR(100);
+    ALTER TABLE transactions ADD COLUMN IF NOT EXISTS product_name VARCHAR(255);
+    ALTER TABLE transactions ADD COLUMN IF NOT EXISTS hsn VARCHAR(20);
+    ALTER TABLE transactions ADD COLUMN IF NOT EXISTS gst_rate NUMERIC(5,2);
+    ALTER TABLE transactions ADD COLUMN IF NOT EXISTS subtotal NUMERIC(10,2);
+    ALTER TABLE transactions ADD COLUMN IF NOT EXISTS gst_amount NUMERIC(10,2);
+    ALTER TABLE transactions ADD COLUMN IF NOT EXISTS method VARCHAR(50);
+    ALTER TABLE transactions ADD COLUMN IF NOT EXISTS tax_type VARCHAR(50);
 
     -- ── CUSTOMER SESSIONS ─────────────────────────────────────────────────
     CREATE TABLE IF NOT EXISTS customer_sessions (
@@ -829,12 +851,23 @@ function txnToRow(t) {
     order_id: t.orderId || null,
     customer_id: t.customerId || null,
     type: t.type || 'payment',
-    amount: t.amount || 0,
+    amount: t.total ?? t.amount ?? 0,
     currency: t.currency || 'INR',
     gateway: t.gateway || null,
     gateway_ref: t.gatewayRef || null,
     status: t.status || 'pending',
     metadata: t.metadata ? JSON.stringify(t.metadata) : null,
+    customer: t.customer || null,
+    email: t.email || null,
+    state: t.state || null,
+    country: t.country || null,
+    product_name: t.productName || null,
+    hsn: t.hsn || null,
+    gst_rate: t.gstRate ?? null,
+    subtotal: t.subtotal ?? null,
+    gst_amount: t.gstAmount ?? null,
+    method: t.method || null,
+    tax_type: t.taxType || null,
   };
 }
 
@@ -844,7 +877,16 @@ function rowToTxn(r) {
     type: r.type, amount: parseFloat(r.amount),
     currency: r.currency, gateway: r.gateway,
     gatewayRef: r.gateway_ref, status: r.status,
-    metadata: r.metadata, createdAt: r.created_at,
+    metadata: r.metadata, createdAt: r.created_at, date: r.created_at,
+    customer: r.customer, email: r.email,
+    state: r.state, country: r.country,
+    productName: r.product_name, hsn: r.hsn,
+    gstRate: r.gst_rate !== null ? parseFloat(r.gst_rate) : null,
+    subtotal: r.subtotal !== null ? parseFloat(r.subtotal) : null,
+    gstAmount: r.gst_amount !== null ? parseFloat(r.gst_amount) : null,
+    total: parseFloat(r.amount),
+    method: r.method,
+    taxType: r.tax_type,
   };
 }
 
